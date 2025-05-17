@@ -42,7 +42,7 @@ O sistema usa **FreeRTOS** com filas para comunicação entre tarefas, garantind
   - Joystick (ADC em GPIO26 e GPIO27).
   - Display OLED SSD1306 (I2C em GPIO14 e GPIO15).
   - LED RGB (PWM em GPIO11, GPIO12, GPIO13) ou LEDs verde/azul (se RGB não disponível).
-  - Matriz de LEDs (ex.: MAX7219 via SPI, pinos a confirmar).
+  - Matriz de LEDs 
 - **Software**:
   - FreeRTOS para gerenciamento de tarefas.
   - Pico SDK para configuração de hardware.
