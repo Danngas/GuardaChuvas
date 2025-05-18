@@ -222,9 +222,9 @@ void vLedRgbTask(void *params) {
         // Ajusta cores com base no system_state
         switch (system_state) {
             case SEGURO:
-                pwm_set_chan_level(slice_red, chan_red, 1);     // Vermelho: 0
+                pwm_set_chan_level(slice_red, chan_red, 0);     // Vermelho: 0
                 pwm_set_chan_level(slice_green, chan_green, 1); // Verde: 100%
-                pwm_set_chan_level(slice_blue, chan_blue, 1);    // Azul: 0
+                pwm_set_chan_level(slice_blue, chan_blue, 0);    // Azul: 0
                 printf("vLedRgbTask: Verde (Seguro)\n");
                 break;
             case ALERTA:
@@ -234,7 +234,7 @@ void vLedRgbTask(void *params) {
                 printf("vLedRgbTask: Amarelo (Alerta)\n");
                 break;
             case ENCHENTE:
-                pwm_set_chan_level(slice_red, chan_red, 50);   // Vermelho: 100%
+                pwm_set_chan_level(slice_red, chan_red, 1);   // Vermelho: 100%
                 pwm_set_chan_level(slice_green, chan_green, 0);  // Verde: 0
                 pwm_set_chan_level(slice_blue, chan_blue, 0);    // Azul: 0
                 printf("vLedRgbTask: Vermelho (Enchente)\n");
