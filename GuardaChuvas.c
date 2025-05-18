@@ -32,7 +32,7 @@
 #define LED_RGB_GREEN 11
 #define LED_RGB_BLUE 12
 #define MATRIZ_WS2812B 7
-#define BUZZER 10
+#define BUZZER 21
 #define BOTAO_B 6
 
 // Estrutura para dados dos sensores
@@ -229,7 +229,7 @@ void vLedRgbTask(void *params) {
                 break;
             case ALERTA:
                 pwm_set_chan_level(slice_red, chan_red, 1);   // Vermelho: 100%
-                pwm_set_chan_level(slice_green, chan_green, 1); // Verde: 100%
+                pwm_set_chan_level(slice_green, chan_green,1); // Verde: 100%
                 pwm_set_chan_level(slice_blue, chan_blue, 0);    // Azul: 0
                 printf("vLedRgbTask: Amarelo (Alerta)\n");
                 break;
@@ -244,6 +244,51 @@ void vLedRgbTask(void *params) {
     }
 }
 
+
+// Tarefa de controle do buzzer
+void vBuzzerTask(void *params) {
+    // Configura GPIO como PWM
+    gpio_set_function(BUZZER, GPIO_FUNC_PWM);
+    uint slice = pwm_gpio_to_slice_num(BUZZER);
+    uint chan = pwm_gpio_to_channel(BUZZER);
+
+    // Configura PWM: 500 Hz, duty cycle 50%
+    uint clock = 125000000; // Clock de 125 MHz
+    uint divider = 4;       // Divisor de clock
+    uint top = clock / (divider * 500); // 500 Hz
+    pwm_set_clkdiv(slice, divider);
+    pwm_set_wrap(slice, top);
+    pwm_set_chan_level(slice, chan, top / 2); // Duty cycle 50%
+    pwm_set_enabled(slice, false); // Inicia desligado
+
+    while (true) {
+        switch (system_state) {
+            case SEGURO:
+                pwm_set_enabled(slice, false); // Silêncio
+                printf("vBuzzerTask: Silêncio (Seguro)\n");
+                vTaskDelay(pdMS_TO_TICKS(100)); // Mantém sincronia
+                break;
+            case ALERTA:
+                // Beeps curtos: 500ms ligado, 500ms desligado
+                pwm_set_enabled(slice, true);
+                printf("vBuzzerTask: Beep curto (Alerta)\n");
+                vTaskDelay(pdMS_TO_TICKS(500));
+                pwm_set_enabled(slice, false);
+                vTaskDelay(pdMS_TO_TICKS(500));
+                break;
+            case ENCHENTE:
+                // Beeps rápidos: 200ms ligado, 200ms desligado
+                pwm_set_enabled(slice, true);
+                printf("vBuzzerTask: Beep rápido (Enchente)\n");
+                vTaskDelay(pdMS_TO_TICKS(200));
+                pwm_set_enabled(slice, false);
+                vTaskDelay(pdMS_TO_TICKS(200));
+                break;
+        }
+    }
+}
+
+
 int main() {
     // Configura Botão B (BOOTSEL)
     gpio_init(BOTAO_B);
@@ -252,13 +297,14 @@ int main() {
     gpio_set_irq_enabled_with_callback(BOTAO_B, GPIO_IRQ_EDGE_FALL, true, &gpio_irq_handler);
 
     stdio_init_all();
-    xQueueSensorData = xQueueCreate(5, sizeof(sensor_data_t));
+    xQueueSensorData = xQueueCreate(6, sizeof(sensor_data_t));
 
     // Criação das tarefas
     xTaskCreate(vSensorTask, "Sensor Task", 256, NULL, 2, NULL);
     xTaskCreate(vAlertLogicTask, "Alert Logic Task", 256, NULL, 1, NULL);
     xTaskCreate(vDisplayTask, "Display Task", 512, NULL, 1, NULL);
     xTaskCreate(vLedRgbTask, "LED RGB Task", 256, NULL, 1, NULL);
+    xTaskCreate(vBuzzerTask, "Buzzer Task", 256, NULL, 1, NULL);
 
     vTaskStartScheduler();
     panic_unsupported();
