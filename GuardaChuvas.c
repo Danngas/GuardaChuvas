@@ -18,7 +18,8 @@
 #include "task.h"
 #include "queue.h"
 #include <stdio.h>
-// MODO BOOTSEL (reset via botão B)
+#include <string.h>
+
 #include "pico/bootrom.h" // Biblioteca para reinicialização via USB
 
 // Configurações de hardware
@@ -34,10 +35,10 @@
 #define MATRIZ_WS2812B 7
 #define BUZZER 10
 #define BOTAO_B 6
-#define TAM_QUAD 10
 
 // Estrutura para dados dos sensores
-typedef struct {
+typedef struct
+{
     uint16_t chuva; // Volume de chuva
     uint16_t agua;  // Nível de água
 } sensor_data_t;
@@ -45,21 +46,25 @@ typedef struct {
 QueueHandle_t xQueueSensorData;
 
 // Manipulador de interrupção para Botão B (BOOTSEL)
-void gpio_irq_handler(uint gpio, uint32_t events) {
-    if (gpio == BOTAO_B && events & GPIO_IRQ_EDGE_FALL) {
+void gpio_irq_handler(uint gpio, uint32_t events)
+{
+    if (gpio == BOTAO_B && events & GPIO_IRQ_EDGE_FALL)
+    {
         printf("Botão B pressionado: entrando em modo BOOTSEL\n");
         reset_usb_boot(0, 0);
     }
 }
 
 // Tarefa de leitura dos sensores
-void vSensorTask(void *params) {
-    adc_gpio_init(ADC_SENSOR_AGUA); // Configura GPIO27 como ADC
+void vSensorTask(void *params)
+{
+    adc_gpio_init(ADC_SENSOR_AGUA);  // Configura GPIO27 como ADC
     adc_gpio_init(ADC_SENSOR_CHUVA); // Configura GPIO26 como ADC
-    adc_init(); // Inicializa o conversor ADC
+    adc_init();                      // Inicializa o conversor ADC
 
     sensor_data_t sensordata;
-    while (true) {
+    while (true)
+    {
         adc_select_input(0); // GPIO26 = ADC0 (nível de água)
         sensordata.agua = adc_read();
         adc_select_input(1); // GPIO27 = ADC1 (volume de chuva)
@@ -73,78 +78,95 @@ void vSensorTask(void *params) {
         printf("Sensor Chuva: %u (%d%%), Sensor Água: %u (%d%%)\n",
                sensordata.chuva, volume_chuva, sensordata.agua, nivel_agua);
 
-        // Envia dados para a fila (único mecanismo de comunicação)
+        // Envia dados para a fila
         xQueueSend(xQueueSensorData, &sensordata, 0);
         vTaskDelay(pdMS_TO_TICKS(100)); // Leitura a 10 Hz
     }
 }
 
-// Tarefas do código base (serão substituídas em branches futuras)
-void vDisplayTask(void *params) {
+// Tarefa do display OLED
+void vDisplayTask(void *params)
+{
+    // Inicializa I2C
     i2c_init(I2C_PORT, 400 * 1000);
     gpio_set_function(I2C_SDA, GPIO_FUNC_I2C);
     gpio_set_function(I2C_SCL, GPIO_FUNC_I2C);
     gpio_pull_up(I2C_SDA);
     gpio_pull_up(I2C_SCL);
 
+    // Inicializa display
     ssd1306_t ssd;
-    ssd1306_init(&ssd, WIDTH, HEIGHT, false, ENDERECO_OLED, I2C_PORT);
+    ssd1306_init(&ssd, 128, 64, false, ENDERECO_OLED, I2C_PORT);
     ssd1306_config(&ssd);
+    ssd1306_fill(&ssd, false); // Limpa o display
     ssd1306_send_data(&ssd);
 
     sensor_data_t sensordata;
-    bool cor = true;
-    while (true) {
-        if (xQueueReceive(xQueueSensorData, &sensordata, portMAX_DELAY) == pdTRUE) {
-            uint8_t x = (sensordata.chuva * (128 - TAM_QUAD)) / 4095;
-            uint8_t y = (sensordata.agua * (64 - TAM_QUAD)) / 4095;
-            y = (64 - TAM_QUAD) - y;
-            ssd1306_fill(&ssd, !cor);
-            ssd1306_rect(&ssd, y, x, TAM_QUAD, TAM_QUAD, cor, !cor);
+    char buffer[32];
+    while (true)
+    {
+        if (xQueueReceive(xQueueSensorData, &sensordata, portMAX_DELAY) == pdTRUE)
+        {
+            // Mapeia valores para percentuais
+            uint8_t nivel_agua = (sensordata.agua * 100) / 4095;
+            uint8_t volume_chuva = (sensordata.chuva * 100) / 4095;
+
+            // Determina o estado (temporário, será movido para vAlertLogicTask)
+
+            // Limpa o display
+            ssd1306_fill(&ssd, false);
+
+            const char *status;
+            if (nivel_agua >= 80 || volume_chuva >= 80)
+            {
+                status = "Enchente";
+                ssd1306_rect(&ssd, 1, 1,126, 62, true, false);
+                ssd1306_rect(&ssd, 28,10,105,12 , true, false);
+               
+                
+            }
+            else if (nivel_agua >= 50 || volume_chuva >= 50)
+            {
+                status = "Alerta";
+                ssd1306_rect(&ssd, 28,10,105,12 , true, false);
+            }
+            else
+            {
+                status = "Seguro";
+            }
+            ssd1306_rect(&ssd, 0, 0,128, 64, true, false);
+                                   
+
+            // Exibe "Água: X%"
+            snprintf(buffer, sizeof(buffer), "Agua: %d%%", nivel_agua);
+            ssd1306_draw_string(&ssd, buffer,25,4);
+
+            // Exibe "Chuva: Y%"
+            snprintf(buffer, sizeof(buffer), "Chuva: %d%%", volume_chuva);
+            ssd1306_draw_string(&ssd, buffer,25,15);
+
+            // Exibe status
+            snprintf(buffer, sizeof(buffer), "%s", status);
+            ssd1306_draw_string(&ssd,buffer,35,30 );
+
+           
+
+            // Desenha barra gráfica para nível de água (100 pixels de largura, 8 pixels de altura)
+
+            uint8_t barra_largura = nivel_agua; // Escala 0-100% para 0-100 pixels
+            ssd1306_rect(&ssd, 48, 15, barra_largura, 8, true, true);
+            ssd1306_rect(&ssd, 48, 15, 100, 8, true, false);
+
+
+            // Atualiza o display
             ssd1306_send_data(&ssd);
         }
+        vTaskDelay(pdMS_TO_TICKS(100)); // Atualiza a 10 Hz
     }
 }
 
-void vLedGreenTask(void *params) {
-    gpio_set_function(LED_RGB_GREEN, GPIO_FUNC_PWM);
-    uint slice = pwm_gpio_to_slice_num(LED_RGB_GREEN);
-    pwm_set_wrap(slice, 100);
-    pwm_set_chan_level(slice, PWM_CHAN_B, 0);
-    pwm_set_enabled(slice, true);
-
-    sensor_data_t sensordata;
-    while (true) {
-        if (xQueueReceive(xQueueSensorData, &sensordata, portMAX_DELAY) == pdTRUE) {
-            int16_t desvio_centro = (int16_t)sensordata.chuva - 2000;
-            if (desvio_centro < 0) desvio_centro = -desvio_centro;
-            uint16_t pwm_value = (desvio_centro * 100) / 2048;
-            pwm_set_chan_level(slice, PWM_CHAN_B, pwm_value);
-        }
-        vTaskDelay(pdMS_TO_TICKS(50));
-    }
-}
-
-void vLedBlueTask(void *params) {
-    gpio_set_function(LED_RGB_BLUE, GPIO_FUNC_PWM);
-    uint slice = pwm_gpio_to_slice_num(LED_RGB_BLUE);
-    pwm_set_wrap(slice, 100);
-    pwm_set_chan_level(slice, PWM_CHAN_A, 0);
-    pwm_set_enabled(slice, true);
-
-    sensor_data_t sensordata;
-    while (true) {
-        if (xQueueReceive(xQueueSensorData, &sensordata, portMAX_DELAY) == pdTRUE) {
-            int16_t desvio_centro = (int16_t)sensordata.agua - 2048;
-            if (desvio_centro < 0) desvio_centro = -desvio_centro;
-            uint16_t pwm_value = (desvio_centro * 100) / 2048;
-            pwm_set_chan_level(slice, PWM_CHAN_A, pwm_value);
-        }
-        vTaskDelay(pdMS_TO_TICKS(50));
-    }
-}
-
-int main() {
+int main()
+{
     // Configura Botão B (BOOTSEL)
     gpio_init(BOTAO_B);
     gpio_set_dir(BOTAO_B, GPIO_IN);
@@ -157,8 +179,6 @@ int main() {
     // Criação das tarefas
     xTaskCreate(vSensorTask, "Sensor Task", 256, NULL, 2, NULL);
     xTaskCreate(vDisplayTask, "Display Task", 512, NULL, 1, NULL);
-    xTaskCreate(vLedGreenTask, "LED Green Task", 256, NULL, 1, NULL);
-    xTaskCreate(vLedBlueTask, "LED Blue Task", 256, NULL, 1, NULL);
 
     vTaskStartScheduler();
     panic_unsupported();
