@@ -11,9 +11,9 @@
 #include "hardware/gpio.h"
 #include "hardware/adc.h"
 #include "hardware/i2c.h"
+#include "hardware/pwm.h"
 #include "lib/ssd1306.h"
 #include "lib/font.h"
-#include "hardware/pwm.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
@@ -28,9 +28,9 @@
 #define ENDERECO_OLED 0x3C
 #define ADC_SENSOR_CHUVA 26
 #define ADC_SENSOR_AGUA 27
-#define LED_RGB_RED 11
-#define LED_RGB_GREEN 12
-#define LED_RGB_BLUE 13
+#define LED_RGB_RED 13
+#define LED_RGB_GREEN 11
+#define LED_RGB_BLUE 12
 #define MATRIZ_WS2812B 7
 #define BUZZER 10
 #define BOTAO_B 6
@@ -40,6 +40,16 @@ typedef struct {
     uint16_t chuva; // Volume de chuva
     uint16_t agua;  // Nível de água
 } sensor_data_t;
+
+// Enum para estados de alerta
+typedef enum {
+    SEGURO,
+    ALERTA,
+    ENCHENTE
+} alert_state_t;
+
+// Variável global para o estado do sistema
+volatile alert_state_t system_state = SEGURO;
 
 QueueHandle_t xQueueSensorData;
 
@@ -78,10 +88,38 @@ void vSensorTask(void *params) {
     }
 }
 
+// Tarefa de lógica de alerta
+void vAlertLogicTask(void *params) {
+    sensor_data_t sensordata;
+    while (true) {
+        // Usa xQueuePeek para não consumir a mensagem
+        if (xQueuePeek(xQueueSensorData, &sensordata, pdMS_TO_TICKS(100)) == pdTRUE) {
+            // Mapeia valores para percentuais
+            uint8_t nivel_agua = (sensordata.agua * 100) / 4095;
+            uint8_t volume_chuva = (sensordata.chuva * 100) / 4095;
+
+            // Determina o estado
+            alert_state_t new_state;
+            if (nivel_agua >= 80 || volume_chuva >= 80) {
+                new_state = ENCHENTE;
+            } else if (nivel_agua >= 50 || volume_chuva >= 50) {
+                new_state = ALERTA;
+            } else {
+                new_state = SEGURO;
+            }
+
+            // Atualiza o estado global
+            system_state = new_state;
+
+            // Depuração: imprime estado atualizado
+            printf("vAlertLogicTask: Estado atualizado: %d (0=Seguro, 1=Alerta, 2=Enchente)\n", (int)new_state);
+        }
+        vTaskDelay(pdMS_TO_TICKS(100)); // Processa a 10 Hz
+    }
+}
+
 // Tarefa do display OLED
-// Tarefa do display OLED
-void vDisplayTask(void *params)
-{
+void vDisplayTask(void *params) {
     // Inicializa I2C
     i2c_init(I2C_PORT, 400 * 1000);
     gpio_set_function(I2C_SDA, GPIO_FUNC_I2C);
@@ -98,63 +136,109 @@ void vDisplayTask(void *params)
 
     sensor_data_t sensordata;
     char buffer[32];
-    while (true)
-    {
-        if (xQueueReceive(xQueueSensorData, &sensordata, portMAX_DELAY) == pdTRUE)
-        {
+    while (true) {
+        if (xQueueReceive(xQueueSensorData, &sensordata, portMAX_DELAY) == pdTRUE) {
             // Mapeia valores para percentuais
             uint8_t nivel_agua = (sensordata.agua * 100) / 4095;
             uint8_t volume_chuva = (sensordata.chuva * 100) / 4095;
 
-            // Determina o estado (temporário, será movido para vAlertLogicTask)
-
             // Limpa o display
             ssd1306_fill(&ssd, false);
 
+            // Consulta o estado global
             const char *status;
-            if (nivel_agua >= 80 || volume_chuva >= 80)
-            {
+            if (system_state == ENCHENTE) {
                 status = "Enchente";
-                ssd1306_rect(&ssd, 1, 1,126, 62, true, false);
-                ssd1306_rect(&ssd, 28,10,105,12 , true, false);
-               
-                
-            }
-            else if (nivel_agua >= 50 || volume_chuva >= 50)
-            {
+                ssd1306_rect(&ssd, 1, 1, 126, 62, true, false);
+                ssd1306_rect(&ssd, 28, 10, 105, 12, true, false);
+            } else if (system_state == ALERTA) {
                 status = "Alerta";
-                ssd1306_rect(&ssd, 28,10,105,12 , true, false);
-            }
-            else
-            {
+                ssd1306_rect(&ssd, 28, 10, 105, 12, true, false);
+            } else {
                 status = "Seguro";
             }
-            ssd1306_rect(&ssd, 0, 0,128, 64, true, false);
-                                   
+            ssd1306_rect(&ssd, 0, 0, 128, 64, true, false);
 
             // Exibe "Água: X%"
             snprintf(buffer, sizeof(buffer), "Agua: %d%%", nivel_agua);
-            ssd1306_draw_string(&ssd, buffer,25,4);
+            ssd1306_draw_string(&ssd, buffer, 25, 4);
 
             // Exibe "Chuva: Y%"
             snprintf(buffer, sizeof(buffer), "Chuva: %d%%", volume_chuva);
-            ssd1306_draw_string(&ssd, buffer,25,15);
+            ssd1306_draw_string(&ssd, buffer, 25, 15);
 
             // Exibe status
             snprintf(buffer, sizeof(buffer), "%s", status);
-            ssd1306_draw_string(&ssd,buffer,35,30 );
-
-           
+            ssd1306_draw_string(&ssd, buffer, 35, 30);
 
             // Desenha barra gráfica para nível de água (100 pixels de largura, 8 pixels de altura)
-
             uint8_t barra_largura = nivel_agua; // Escala 0-100% para 0-100 pixels
             ssd1306_rect(&ssd, 48, 15, barra_largura, 8, true, true);
             ssd1306_rect(&ssd, 48, 15, 100, 8, true, false);
 
-
             // Atualiza o display
             ssd1306_send_data(&ssd);
+        }
+        vTaskDelay(pdMS_TO_TICKS(100)); // Atualiza a 10 Hz
+    }
+}
+
+// Tarefa de controle do LED RGB
+void vLedRgbTask(void *params) {
+    // Configura GPIOs como PWM
+    gpio_set_function(LED_RGB_RED, GPIO_FUNC_PWM);
+    gpio_set_function(LED_RGB_GREEN, GPIO_FUNC_PWM);
+    gpio_set_function(LED_RGB_BLUE, GPIO_FUNC_PWM);
+
+    // Obtém os slices PWM
+    uint slice_red = pwm_gpio_to_slice_num(LED_RGB_RED);
+    uint slice_green = pwm_gpio_to_slice_num(LED_RGB_GREEN);
+    uint slice_blue = pwm_gpio_to_slice_num(LED_RGB_BLUE);
+
+    // Configura PWM: ~1 kHz, resolução de 8 bits
+    pwm_set_clkdiv(slice_red, 100.0f); // 125 MHz / 100 / 256 = ~4.88 kHz, ajustado para ~1 kHz
+    pwm_set_clkdiv(slice_green, 100.0f);
+    pwm_set_clkdiv(slice_blue, 100.0f);
+    pwm_set_wrap(slice_red, 255); // Resolução 0–255
+    pwm_set_wrap(slice_green, 255);
+    pwm_set_wrap(slice_blue, 255);
+
+    // Define canais PWM (A ou B dependendo do GPIO)
+    uint chan_red = pwm_gpio_to_channel(LED_RGB_RED);
+    uint chan_green = pwm_gpio_to_channel(LED_RGB_GREEN);
+    uint chan_blue = pwm_gpio_to_channel(LED_RGB_BLUE);
+
+    // Duty inicial: 0 (desligado)
+    pwm_set_chan_level(slice_red, chan_red, 0);
+    pwm_set_chan_level(slice_green, chan_green, 0);
+    pwm_set_chan_level(slice_blue, chan_blue, 0);
+
+    // Habilita PWM
+    pwm_set_enabled(slice_red, true);
+    pwm_set_enabled(slice_green, true);
+    pwm_set_enabled(slice_blue, true);
+
+    while (true) {
+        // Ajusta cores com base no system_state
+        switch (system_state) {
+            case SEGURO:
+                pwm_set_chan_level(slice_red, chan_red, 0);     // Vermelho: 0
+                pwm_set_chan_level(slice_green, chan_green, 1); // Verde: 100%
+                pwm_set_chan_level(slice_blue, chan_blue, 0);    // Azul: 0
+                printf("vLedRgbTask: Verde (Seguro)\n");
+                break;
+            case ALERTA:
+                pwm_set_chan_level(slice_red, chan_red, 1);   // Vermelho: 100%
+                pwm_set_chan_level(slice_green, chan_green, 1); // Verde: 100%
+                pwm_set_chan_level(slice_blue, chan_blue, 0);    // Azul: 0
+                printf("vLedRgbTask: Amarelo (Alerta)\n");
+                break;
+            case ENCHENTE:
+                pwm_set_chan_level(slice_red, chan_red, 1);   // Vermelho: 100%
+                pwm_set_chan_level(slice_green, chan_green, 0);  // Verde: 0
+                pwm_set_chan_level(slice_blue, chan_blue, 0);    // Azul: 0
+                printf("vLedRgbTask: Vermelho (Enchente)\n");
+                break;
         }
         vTaskDelay(pdMS_TO_TICKS(100)); // Atualiza a 10 Hz
     }
@@ -172,7 +256,9 @@ int main() {
 
     // Criação das tarefas
     xTaskCreate(vSensorTask, "Sensor Task", 256, NULL, 2, NULL);
+    xTaskCreate(vAlertLogicTask, "Alert Logic Task", 256, NULL, 1, NULL);
     xTaskCreate(vDisplayTask, "Display Task", 512, NULL, 1, NULL);
+    xTaskCreate(vLedRgbTask, "LED RGB Task", 256, NULL, 1, NULL);
 
     vTaskStartScheduler();
     panic_unsupported();
