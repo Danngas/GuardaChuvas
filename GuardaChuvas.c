@@ -1,169 +1,185 @@
-
-#include "lib/ssd1306.h"
-#include "lib/font.h"
+/*
+ * GuardaChuvas: Estação de Alerta de Enchente com Simulação de Sensores
+ * Autor: Daniel Silva de Souza
+ * Data: 18/05/2025
+ * Descrição: Sistema embarcado com FreeRTOS para monitoramento de nível de água
+ * e volume de chuva, com alertas visuais (display OLED, LED RGB, matriz WS2812B 5x5)
+ * e sonoros (buzzer). Usa apenas filas para comunicação, sem semáforos ou mutexes.
+ */
 
 #include "pico/stdlib.h"
 #include "hardware/gpio.h"
 #include "hardware/adc.h"
 #include "hardware/i2c.h"
-
+#include "lib/ssd1306.h"
+#include "lib/font.h"
 #include "hardware/pwm.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
 #include <stdio.h>
-#include "lib/animacoes.h"
+#include <string.h>
 
+#include "pico/bootrom.h" // Biblioteca para reinicialização via USB
 
+// Configurações de hardware
 #define I2C_PORT i2c1
 #define I2C_SDA 14
 #define I2C_SCL 15
-#define endereco 0x3C
-#define ADC_JOYSTICK_X 26
-#define ADC_JOYSTICK_Y 27
-#define LED_BLUE 12
-#define LED_GREEN  11
-#define tam_quad 10
+#define ENDERECO_OLED 0x3C
+#define ADC_SENSOR_CHUVA 26
+#define ADC_SENSOR_AGUA 27
+#define LED_RGB_RED 11
+#define LED_RGB_GREEN 12
+#define LED_RGB_BLUE 13
+#define MATRIZ_WS2812B 7
+#define BUZZER 10
+#define BOTAO_B 6
 
-// ----------------------------- DEFINIÇÕES DE PINOS -----------------------------
-#define MATRIZ_LED_PIN 7 // Pino conectado à matriz de LEDs WS2812
-
+// Estrutura para dados dos sensores
 typedef struct
 {
-    uint16_t x_pos;
-    uint16_t y_pos;
-} joystick_data_t;
+    uint16_t chuva; // Volume de chuva
+    uint16_t agua;  // Nível de água
+} sensor_data_t;
 
-QueueHandle_t xQueueJoystickData;
+QueueHandle_t xQueueSensorData;
 
-void vJoystickTask(void *params)
+// Manipulador de interrupção para Botão B (BOOTSEL)
+void gpio_irq_handler(uint gpio, uint32_t events)
 {
-    adc_gpio_init(ADC_JOYSTICK_Y);
-    adc_gpio_init(ADC_JOYSTICK_X);
-    adc_init();
-
-    joystick_data_t joydata;
-
-    while (true)
+    if (gpio == BOTAO_B && events & GPIO_IRQ_EDGE_FALL)
     {
-        adc_select_input(0); // GPIO 26 = ADC0
-        joydata.y_pos = adc_read();
-
-        adc_select_input(1); // GPIO 27 = ADC1
-        joydata.x_pos = adc_read();
-
-        xQueueSend(xQueueJoystickData, &joydata, 0); // Envia o valor do joystick para a fila
-        vTaskDelay(pdMS_TO_TICKS(100));              // 10 Hz de leitura
+        printf("Botão B pressionado: entrando em modo BOOTSEL\n");
+        reset_usb_boot(0, 0);
     }
 }
 
+// Tarefa de leitura dos sensores
+void vSensorTask(void *params)
+{
+    adc_gpio_init(ADC_SENSOR_AGUA);  // Configura GPIO27 como ADC
+    adc_gpio_init(ADC_SENSOR_CHUVA); // Configura GPIO26 como ADC
+    adc_init();                      // Inicializa o conversor ADC
+
+    sensor_data_t sensordata;
+    while (true)
+    {
+        adc_select_input(0); // GPIO26 = ADC0 (nível de água)
+        sensordata.agua = adc_read();
+        adc_select_input(1); // GPIO27 = ADC1 (volume de chuva)
+        sensordata.chuva = adc_read();
+
+        // Mapeia valores ADC (0-4095) para percentuais (0-100)
+        uint8_t nivel_agua = (sensordata.agua * 100) / 4095;
+        uint8_t volume_chuva = (sensordata.chuva * 100) / 4095;
+
+        // Depuração: imprime valores brutos e percentuais
+        printf("Sensor Chuva: %u (%d%%), Sensor Água: %u (%d%%)\n",
+               sensordata.chuva, volume_chuva, sensordata.agua, nivel_agua);
+
+        // Envia dados para a fila
+        xQueueSend(xQueueSensorData, &sensordata, 0);
+        vTaskDelay(pdMS_TO_TICKS(100)); // Leitura a 10 Hz
+    }
+}
+
+// Tarefa do display OLED
 void vDisplayTask(void *params)
 {
+    // Inicializa I2C
     i2c_init(I2C_PORT, 400 * 1000);
     gpio_set_function(I2C_SDA, GPIO_FUNC_I2C);
     gpio_set_function(I2C_SCL, GPIO_FUNC_I2C);
     gpio_pull_up(I2C_SDA);
     gpio_pull_up(I2C_SCL);
 
+    // Inicializa display
     ssd1306_t ssd;
-    ssd1306_init(&ssd, WIDTH, HEIGHT, false, endereco, I2C_PORT);
+    ssd1306_init(&ssd, 128, 64, false, ENDERECO_OLED, I2C_PORT);
     ssd1306_config(&ssd);
+    ssd1306_fill(&ssd, false); // Limpa o display
     ssd1306_send_data(&ssd);
 
-    joystick_data_t joydata;
-    bool cor = true;
+    sensor_data_t sensordata;
+    char buffer[32];
     while (true)
     {
-        if (xQueueReceive(xQueueJoystickData, &joydata, portMAX_DELAY) == pdTRUE)
+        if (xQueueReceive(xQueueSensorData, &sensordata, portMAX_DELAY) == pdTRUE)
         {
-            uint8_t x = (joydata.x_pos * (128 - tam_quad)) / 4095;
-            uint8_t y = (joydata.y_pos * (64 - tam_quad)) / 4095;
-            y = (64 - tam_quad) - y;                                 // Inverte o eixo Y
-            ssd1306_fill(&ssd, !cor);                                // Limpa a tela
-            ssd1306_rect(&ssd, y, x, tam_quad, tam_quad, cor, !cor); // Quadrado 5x5
+            // Mapeia valores para percentuais
+            uint8_t nivel_agua = (sensordata.agua * 100) / 4095;
+            uint8_t volume_chuva = (sensordata.chuva * 100) / 4095;
+
+            // Determina o estado (temporário, será movido para vAlertLogicTask)
+
+            // Limpa o display
+            ssd1306_fill(&ssd, false);
+
+            const char *status;
+            if (nivel_agua >= 80 || volume_chuva >= 80)
+            {
+                status = "Enchente";
+                ssd1306_rect(&ssd, 1, 1,126, 62, true, false);
+                ssd1306_rect(&ssd, 28,10,105,12 , true, false);
+               
+                
+            }
+            else if (nivel_agua >= 50 || volume_chuva >= 50)
+            {
+                status = "Alerta";
+                ssd1306_rect(&ssd, 28,10,105,12 , true, false);
+            }
+            else
+            {
+                status = "Seguro";
+            }
+            ssd1306_rect(&ssd, 0, 0,128, 64, true, false);
+                                   
+
+            // Exibe "Água: X%"
+            snprintf(buffer, sizeof(buffer), "Agua: %d%%", nivel_agua);
+            ssd1306_draw_string(&ssd, buffer,25,4);
+
+            // Exibe "Chuva: Y%"
+            snprintf(buffer, sizeof(buffer), "Chuva: %d%%", volume_chuva);
+            ssd1306_draw_string(&ssd, buffer,25,15);
+
+            // Exibe status
+            snprintf(buffer, sizeof(buffer), "%s", status);
+            ssd1306_draw_string(&ssd,buffer,35,30 );
+
+           
+
+            // Desenha barra gráfica para nível de água (100 pixels de largura, 8 pixels de altura)
+
+            uint8_t barra_largura = nivel_agua; // Escala 0-100% para 0-100 pixels
+            ssd1306_rect(&ssd, 48, 15, barra_largura, 8, true, true);
+            ssd1306_rect(&ssd, 48, 15, 100, 8, true, false);
+
+
+            // Atualiza o display
             ssd1306_send_data(&ssd);
         }
+        vTaskDelay(pdMS_TO_TICKS(100)); // Atualiza a 10 Hz
     }
-}
-
-void vLedGreenTask(void *params)
-{
-    gpio_set_function(LED_GREEN, GPIO_FUNC_PWM);   // Configura GPIO como PWM
-    uint slice = pwm_gpio_to_slice_num(LED_GREEN); // Obtém o slice de PWM
-    pwm_set_wrap(slice, 100);                     // Define resolução (0–100)
-    pwm_set_chan_level(slice, PWM_CHAN_B, 0);     // Duty inicial
-    pwm_set_enabled(slice, true);                 // Ativa PWM
-
-    joystick_data_t joydata;
-    while (true)
-    {
-        if (xQueueReceive(xQueueJoystickData, &joydata, portMAX_DELAY) == pdTRUE)
-        {
-            // Brilho proporcional ao desvio do centro
-            int16_t desvio_centro = (int16_t)joydata.x_pos - 2000;
-            if (desvio_centro < 0)
-                desvio_centro = -desvio_centro;
-            uint16_t pwm_value = (desvio_centro * 100) / 2048;
-            pwm_set_chan_level(slice, PWM_CHAN_B, pwm_value);
-        }
-        vTaskDelay(pdMS_TO_TICKS(50)); // Atualiza a cada 50ms
-    }
-}
-
-void vLedBlueTask(void *params)
-{
-    gpio_set_function(LED_BLUE, GPIO_FUNC_PWM);   // Configura GPIO como PWM
-    uint slice = pwm_gpio_to_slice_num(LED_BLUE); // Obtém o slice de PWM
-    pwm_set_wrap(slice, 100);                     // Define resolução (0–100)
-    pwm_set_chan_level(slice, PWM_CHAN_A, 0);     // Duty inicial
-    pwm_set_enabled(slice, true);                 // Ativa PWM
-
-    joystick_data_t joydata;
-    while (true)
-    {
-        if (xQueueReceive(xQueueJoystickData, &joydata, portMAX_DELAY) == pdTRUE)
-        {
-            // Brilho proporcional ao desvio do centro
-            int16_t desvio_centro = (int16_t)joydata.y_pos - 2048;
-            if (desvio_centro < 0)
-                desvio_centro = -desvio_centro;
-            uint16_t pwm_value = (desvio_centro * 100) / 2048;
-            pwm_set_chan_level(slice, PWM_CHAN_A, pwm_value);
-        }
-        vTaskDelay(pdMS_TO_TICKS(50)); // Atualiza a cada 50ms
-    }
-}
-
-
-// Modo BOOTSEL com botão B
-#include "pico/bootrom.h"
-#define botaoB 6
-void gpio_irq_handler(uint gpio, uint32_t events)
-{
-    reset_usb_boot(0, 0);
 }
 
 int main()
 {
-    // Ativa BOOTSEL via botão
-    npInit(MATRIZ_LED_PIN); // Inicializa a matriz de LEDs WS2812
-    gpio_init(botaoB);
-    gpio_set_dir(botaoB, GPIO_IN);
-    gpio_pull_up(botaoB);
-    gpio_set_irq_enabled_with_callback(botaoB, GPIO_IRQ_EDGE_FALL, true, &gpio_irq_handler);
+    // Configura Botão B (BOOTSEL)
+    gpio_init(BOTAO_B);
+    gpio_set_dir(BOTAO_B, GPIO_IN);
+    gpio_pull_up(BOTAO_B);
+    gpio_set_irq_enabled_with_callback(BOTAO_B, GPIO_IRQ_EDGE_FALL, true, &gpio_irq_handler);
 
     stdio_init_all();
-    PedrestePARE();
+    xQueueSensorData = xQueueCreate(5, sizeof(sensor_data_t));
 
-    // Cria a fila para compartilhamento de valor do joystick
-    xQueueJoystickData = xQueueCreate(5, sizeof(joystick_data_t));
-
-    // Criação das tasks
-    xTaskCreate(vJoystickTask, "Joystick Task", 256, NULL, 1, NULL);
+    // Criação das tarefas
+    xTaskCreate(vSensorTask, "Sensor Task", 256, NULL, 2, NULL);
     xTaskCreate(vDisplayTask, "Display Task", 512, NULL, 1, NULL);
-    xTaskCreate(vLedGreenTask, "LED red Task", 256, NULL, 1, NULL);
-    xTaskCreate(vLedBlueTask, "LED blue Task", 256, NULL, 1, NULL);
-    // Inicia o agendador
+
     vTaskStartScheduler();
     panic_unsupported();
 }
