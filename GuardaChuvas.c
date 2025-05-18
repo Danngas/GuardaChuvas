@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "pico/bootrom.h" // Biblioteca para reinicialização via USB
+#include "lib/animacoes.h"
 
 // Configurações de hardware
 #define I2C_PORT i2c1
@@ -34,6 +35,7 @@
 #define MATRIZ_WS2812B 7
 #define BUZZER 21
 #define BOTAO_B 6
+#define MATRIZ_WS2812B 7
 
 // Estrutura para dados dos sensores
 typedef struct {
@@ -183,6 +185,8 @@ void vDisplayTask(void *params) {
     }
 }
 
+
+
 // Tarefa de controle do LED RGB
 void vLedRgbTask(void *params) {
     // Configura GPIOs como PWM
@@ -218,13 +222,15 @@ void vLedRgbTask(void *params) {
     pwm_set_enabled(slice_green, true);
     pwm_set_enabled(slice_blue, true);
 
+
+
     while (true) {
         // Ajusta cores com base no system_state
         switch (system_state) {
             case SEGURO:
-                pwm_set_chan_level(slice_red, chan_red, 1);     // Vermelho: 0
+                pwm_set_chan_level(slice_red, chan_red, 0);     // Vermelho: 0
                 pwm_set_chan_level(slice_green, chan_green, 1); // Verde: 100%
-                pwm_set_chan_level(slice_blue, chan_blue, 1);    // Azul: 0
+                pwm_set_chan_level(slice_blue, chan_blue, 0);    // Azul: 0
                 printf("vLedRgbTask: Verde (Seguro)\n");
                 break;
             case ALERTA:
@@ -234,7 +240,7 @@ void vLedRgbTask(void *params) {
                 printf("vLedRgbTask: Amarelo (Alerta)\n");
                 break;
             case ENCHENTE:
-                pwm_set_chan_level(slice_red, chan_red, 50);   // Vermelho: 100%
+                pwm_set_chan_level(slice_red, chan_red, 1);   // Vermelho: 100%
                 pwm_set_chan_level(slice_green, chan_green, 0);  // Verde: 0
                 pwm_set_chan_level(slice_blue, chan_blue, 0);    // Azul: 0
                 printf("vLedRgbTask: Vermelho (Enchente)\n");
@@ -289,6 +295,31 @@ void vBuzzerTask(void *params) {
 }
 
 
+// Tarefa de controle da matriz WS2812B
+void vMatrixTask(void *params) {
+    npInit(MATRIZ_WS2812B); // Inicializa a matriz
+    srand(to_ms_since_boot(get_absolute_time())); // Inicializa semente para rand()
+    while (true) {
+        switch (system_state) {
+            case SEGURO:
+                anim_seguro();
+                printf("vMatrixTask: Animação Seguro\n");
+                break;
+            case ALERTA:
+                anim_alerta();
+                printf("vMatrixTask: Animação Alerta\n");
+                break;
+            case ENCHENTE:
+                anim_enchente();
+                printf("vMatrixTask: Animação Enchente\n");
+                break;
+        }
+        // vTaskDelay está nas animações
+    }
+}
+
+
+
 int main() {
     // Configura Botão B (BOOTSEL)
     gpio_init(BOTAO_B);
@@ -305,6 +336,9 @@ int main() {
     xTaskCreate(vDisplayTask, "Display Task", 512, NULL, 1, NULL);
     xTaskCreate(vLedRgbTask, "LED RGB Task", 256, NULL, 1, NULL);
     xTaskCreate(vBuzzerTask, "Buzzer Task", 256, NULL, 1, NULL);
+    xTaskCreate(vMatrixTask, "Matriz Task", 256, NULL, 1, NULL);
+
+    
 
     vTaskStartScheduler();
     panic_unsupported();
