@@ -18,7 +18,7 @@
 #include "task.h"
 #include "queue.h"
 #include <stdio.h>
-// MODO BOOTSEL (reset via botão B)
+#include <string.h>
 #include "pico/bootrom.h" // Biblioteca para reinicialização via USB
 
 // Configurações de hardware
@@ -34,13 +34,22 @@
 #define MATRIZ_WS2812B 7
 #define BUZZER 10
 #define BOTAO_B 6
-#define TAM_QUAD 10
 
 // Estrutura para dados dos sensores
 typedef struct {
     uint16_t chuva; // Volume de chuva
     uint16_t agua;  // Nível de água
 } sensor_data_t;
+
+// Enum para estados de alerta
+typedef enum {
+    SEGURO,
+    ALERTA,
+    ENCHENTE
+} alert_state_t;
+
+// Variável global para o estado do sistema
+volatile alert_state_t system_state = SEGURO;
 
 QueueHandle_t xQueueSensorData;
 
@@ -73,74 +82,104 @@ void vSensorTask(void *params) {
         printf("Sensor Chuva: %u (%d%%), Sensor Água: %u (%d%%)\n",
                sensordata.chuva, volume_chuva, sensordata.agua, nivel_agua);
 
-        // Envia dados para a fila (único mecanismo de comunicação)
+        // Envia dados para a fila
         xQueueSend(xQueueSensorData, &sensordata, 0);
         vTaskDelay(pdMS_TO_TICKS(100)); // Leitura a 10 Hz
     }
 }
 
-// Tarefas do código base (serão substituídas em branches futuras)
+// Tarefa de lógica de alerta
+void vAlertLogicTask(void *params) {
+    sensor_data_t sensordata;
+    while (true) {
+        // Usa xQueuePeek para não consumir a mensagem
+        if (xQueuePeek(xQueueSensorData, &sensordata, pdMS_TO_TICKS(100)) == pdTRUE) {
+            // Mapeia valores para percentuais
+            uint8_t nivel_agua = (sensordata.agua * 100) / 4095;
+            uint8_t volume_chuva = (sensordata.chuva * 100) / 4095;
+
+            // Determina o estado
+            alert_state_t new_state;
+            if (nivel_agua >= 80 || volume_chuva >= 80) {
+                new_state = ENCHENTE;
+            } else if (nivel_agua >= 50 || volume_chuva >= 50) {
+                new_state = ALERTA;
+            } else {
+                new_state = SEGURO;
+            }
+
+            // Atualiza o estado global
+            system_state = new_state;
+
+            // Depuração: imprime estado atualizado
+            printf("vAlertLogicTask: Estado atualizado: %d (0=Seguro, 1=Alerta, 2=Enchente)\n", (int)new_state);
+        }
+        vTaskDelay(pdMS_TO_TICKS(100)); // Processa a 10 Hz
+    }
+}
+
+// Tarefa do display OLED
 void vDisplayTask(void *params) {
+    // Inicializa I2C
     i2c_init(I2C_PORT, 400 * 1000);
     gpio_set_function(I2C_SDA, GPIO_FUNC_I2C);
     gpio_set_function(I2C_SCL, GPIO_FUNC_I2C);
     gpio_pull_up(I2C_SDA);
     gpio_pull_up(I2C_SCL);
 
+    // Inicializa display
     ssd1306_t ssd;
-    ssd1306_init(&ssd, WIDTH, HEIGHT, false, ENDERECO_OLED, I2C_PORT);
+    ssd1306_init(&ssd, 128, 64, false, ENDERECO_OLED, I2C_PORT);
     ssd1306_config(&ssd);
+    ssd1306_fill(&ssd, false); // Limpa o display
     ssd1306_send_data(&ssd);
 
     sensor_data_t sensordata;
-    bool cor = true;
+    char buffer[32];
     while (true) {
         if (xQueueReceive(xQueueSensorData, &sensordata, portMAX_DELAY) == pdTRUE) {
-            uint8_t x = (sensordata.chuva * (128 - TAM_QUAD)) / 4095;
-            uint8_t y = (sensordata.agua * (64 - TAM_QUAD)) / 4095;
-            y = (64 - TAM_QUAD) - y;
-            ssd1306_fill(&ssd, !cor);
-            ssd1306_rect(&ssd, y, x, TAM_QUAD, TAM_QUAD, cor, !cor);
+            // Mapeia valores para percentuais
+            uint8_t nivel_agua = (sensordata.agua * 100) / 4095;
+            uint8_t volume_chuva = (sensordata.chuva * 100) / 4095;
+
+            // Limpa o display
+            ssd1306_fill(&ssd, false);
+
+            // Consulta o estado global
+            const char *status;
+            if (system_state == ENCHENTE) {
+                status = "Enchente";
+                ssd1306_rect(&ssd, 1, 1, 126, 62, true, false);
+                ssd1306_rect(&ssd, 28, 10, 105, 12, true, false);
+            } else if (system_state == ALERTA) {
+                status = "Alerta";
+                ssd1306_rect(&ssd, 28, 10, 105, 12, true, false);
+            } else {
+                status = "Seguro";
+            }
+            ssd1306_rect(&ssd, 0, 0, 128, 64, true, false);
+
+            // Exibe "Água: X%"
+            snprintf(buffer, sizeof(buffer), "Agua: %d%%", nivel_agua);
+            ssd1306_draw_string(&ssd, buffer, 25, 4);
+
+            // Exibe "Chuva: Y%"
+            snprintf(buffer, sizeof(buffer), "Chuva: %d%%", volume_chuva);
+            ssd1306_draw_string(&ssd, buffer, 25, 15);
+
+            // Exibe status
+            snprintf(buffer, sizeof(buffer), "%s", status);
+            ssd1306_draw_string(&ssd, buffer, 35, 30);
+
+            // Desenha barra gráfica para nível de água (100 pixels de largura, 8 pixels de altura)
+            uint8_t barra_largura = nivel_agua; // Escala 0-100% para 0-100 pixels
+            ssd1306_rect(&ssd, 48, 15, barra_largura, 8, true, true);
+            ssd1306_rect(&ssd, 48, 15, 100, 8, true, false);
+
+            // Atualiza o display
             ssd1306_send_data(&ssd);
         }
-    }
-}
-
-void vLedGreenTask(void *params) {
-    gpio_set_function(LED_RGB_GREEN, GPIO_FUNC_PWM);
-    uint slice = pwm_gpio_to_slice_num(LED_RGB_GREEN);
-    pwm_set_wrap(slice, 100);
-    pwm_set_chan_level(slice, PWM_CHAN_B, 0);
-    pwm_set_enabled(slice, true);
-
-    sensor_data_t sensordata;
-    while (true) {
-        if (xQueueReceive(xQueueSensorData, &sensordata, portMAX_DELAY) == pdTRUE) {
-            int16_t desvio_centro = (int16_t)sensordata.chuva - 2000;
-            if (desvio_centro < 0) desvio_centro = -desvio_centro;
-            uint16_t pwm_value = (desvio_centro * 100) / 2048;
-            pwm_set_chan_level(slice, PWM_CHAN_B, pwm_value);
-        }
-        vTaskDelay(pdMS_TO_TICKS(50));
-    }
-}
-
-void vLedBlueTask(void *params) {
-    gpio_set_function(LED_RGB_BLUE, GPIO_FUNC_PWM);
-    uint slice = pwm_gpio_to_slice_num(LED_RGB_BLUE);
-    pwm_set_wrap(slice, 100);
-    pwm_set_chan_level(slice, PWM_CHAN_A, 0);
-    pwm_set_enabled(slice, true);
-
-    sensor_data_t sensordata;
-    while (true) {
-        if (xQueueReceive(xQueueSensorData, &sensordata, portMAX_DELAY) == pdTRUE) {
-            int16_t desvio_centro = (int16_t)sensordata.agua - 2048;
-            if (desvio_centro < 0) desvio_centro = -desvio_centro;
-            uint16_t pwm_value = (desvio_centro * 100) / 2048;
-            pwm_set_chan_level(slice, PWM_CHAN_A, pwm_value);
-        }
-        vTaskDelay(pdMS_TO_TICKS(50));
+        vTaskDelay(pdMS_TO_TICKS(100)); // Atualiza a 10 Hz
     }
 }
 
@@ -156,9 +195,8 @@ int main() {
 
     // Criação das tarefas
     xTaskCreate(vSensorTask, "Sensor Task", 256, NULL, 2, NULL);
+    xTaskCreate(vAlertLogicTask, "Alert Logic Task", 256, NULL, 1, NULL);
     xTaskCreate(vDisplayTask, "Display Task", 512, NULL, 1, NULL);
-    xTaskCreate(vLedGreenTask, "LED Green Task", 256, NULL, 1, NULL);
-    xTaskCreate(vLedBlueTask, "LED Blue Task", 256, NULL, 1, NULL);
 
     vTaskStartScheduler();
     panic_unsupported();
