@@ -11,9 +11,9 @@
 #include "hardware/gpio.h"
 #include "hardware/adc.h"
 #include "hardware/i2c.h"
+#include "hardware/pwm.h"
 #include "lib/ssd1306.h"
 #include "lib/font.h"
-#include "hardware/pwm.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
@@ -28,9 +28,9 @@
 #define ENDERECO_OLED 0x3C
 #define ADC_SENSOR_CHUVA 26
 #define ADC_SENSOR_AGUA 27
-#define LED_RGB_RED 11
-#define LED_RGB_GREEN 12
-#define LED_RGB_BLUE 13
+#define LED_RGB_RED 13
+#define LED_RGB_GREEN 11
+#define LED_RGB_BLUE 12
 #define MATRIZ_WS2812B 7
 #define BUZZER 10
 #define BOTAO_B 6
@@ -183,6 +183,67 @@ void vDisplayTask(void *params) {
     }
 }
 
+// Tarefa de controle do LED RGB
+void vLedRgbTask(void *params) {
+    // Configura GPIOs como PWM
+    gpio_set_function(LED_RGB_RED, GPIO_FUNC_PWM);
+    gpio_set_function(LED_RGB_GREEN, GPIO_FUNC_PWM);
+    gpio_set_function(LED_RGB_BLUE, GPIO_FUNC_PWM);
+
+    // Obtém os slices PWM
+    uint slice_red = pwm_gpio_to_slice_num(LED_RGB_RED);
+    uint slice_green = pwm_gpio_to_slice_num(LED_RGB_GREEN);
+    uint slice_blue = pwm_gpio_to_slice_num(LED_RGB_BLUE);
+
+    // Configura PWM: ~1 kHz, resolução de 8 bits
+    pwm_set_clkdiv(slice_red, 100.0f); // 125 MHz / 100 / 256 = ~4.88 kHz, ajustado para ~1 kHz
+    pwm_set_clkdiv(slice_green, 100.0f);
+    pwm_set_clkdiv(slice_blue, 100.0f);
+    pwm_set_wrap(slice_red, 255); // Resolução 0–255
+    pwm_set_wrap(slice_green, 255);
+    pwm_set_wrap(slice_blue, 255);
+
+    // Define canais PWM (A ou B dependendo do GPIO)
+    uint chan_red = pwm_gpio_to_channel(LED_RGB_RED);
+    uint chan_green = pwm_gpio_to_channel(LED_RGB_GREEN);
+    uint chan_blue = pwm_gpio_to_channel(LED_RGB_BLUE);
+
+    // Duty inicial: 0 (desligado)
+    pwm_set_chan_level(slice_red, chan_red, 0);
+    pwm_set_chan_level(slice_green, chan_green, 0);
+    pwm_set_chan_level(slice_blue, chan_blue, 0);
+
+    // Habilita PWM
+    pwm_set_enabled(slice_red, true);
+    pwm_set_enabled(slice_green, true);
+    pwm_set_enabled(slice_blue, true);
+
+    while (true) {
+        // Ajusta cores com base no system_state
+        switch (system_state) {
+            case SEGURO:
+                pwm_set_chan_level(slice_red, chan_red, 0);     // Vermelho: 0
+                pwm_set_chan_level(slice_green, chan_green, 1); // Verde: 100%
+                pwm_set_chan_level(slice_blue, chan_blue, 0);    // Azul: 0
+                printf("vLedRgbTask: Verde (Seguro)\n");
+                break;
+            case ALERTA:
+                pwm_set_chan_level(slice_red, chan_red, 1);   // Vermelho: 100%
+                pwm_set_chan_level(slice_green, chan_green, 1); // Verde: 100%
+                pwm_set_chan_level(slice_blue, chan_blue, 0);    // Azul: 0
+                printf("vLedRgbTask: Amarelo (Alerta)\n");
+                break;
+            case ENCHENTE:
+                pwm_set_chan_level(slice_red, chan_red, 1);   // Vermelho: 100%
+                pwm_set_chan_level(slice_green, chan_green, 0);  // Verde: 0
+                pwm_set_chan_level(slice_blue, chan_blue, 0);    // Azul: 0
+                printf("vLedRgbTask: Vermelho (Enchente)\n");
+                break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(100)); // Atualiza a 10 Hz
+    }
+}
+
 int main() {
     // Configura Botão B (BOOTSEL)
     gpio_init(BOTAO_B);
@@ -197,6 +258,7 @@ int main() {
     xTaskCreate(vSensorTask, "Sensor Task", 256, NULL, 2, NULL);
     xTaskCreate(vAlertLogicTask, "Alert Logic Task", 256, NULL, 1, NULL);
     xTaskCreate(vDisplayTask, "Display Task", 512, NULL, 1, NULL);
+    xTaskCreate(vLedRgbTask, "LED RGB Task", 256, NULL, 1, NULL);
 
     vTaskStartScheduler();
     panic_unsupported();
