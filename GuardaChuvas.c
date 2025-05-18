@@ -19,7 +19,6 @@
 #include "queue.h"
 #include <stdio.h>
 #include <string.h>
-
 #include "pico/bootrom.h" // Biblioteca para reinicialização via USB
 
 // Configurações de hardware
@@ -37,8 +36,7 @@
 #define BOTAO_B 6
 
 // Estrutura para dados dos sensores
-typedef struct
-{
+typedef struct {
     uint16_t chuva; // Volume de chuva
     uint16_t agua;  // Nível de água
 } sensor_data_t;
@@ -46,25 +44,21 @@ typedef struct
 QueueHandle_t xQueueSensorData;
 
 // Manipulador de interrupção para Botão B (BOOTSEL)
-void gpio_irq_handler(uint gpio, uint32_t events)
-{
-    if (gpio == BOTAO_B && events & GPIO_IRQ_EDGE_FALL)
-    {
+void gpio_irq_handler(uint gpio, uint32_t events) {
+    if (gpio == BOTAO_B && events & GPIO_IRQ_EDGE_FALL) {
         printf("Botão B pressionado: entrando em modo BOOTSEL\n");
         reset_usb_boot(0, 0);
     }
 }
 
 // Tarefa de leitura dos sensores
-void vSensorTask(void *params)
-{
-    adc_gpio_init(ADC_SENSOR_AGUA);  // Configura GPIO27 como ADC
+void vSensorTask(void *params) {
+    adc_gpio_init(ADC_SENSOR_AGUA); // Configura GPIO27 como ADC
     adc_gpio_init(ADC_SENSOR_CHUVA); // Configura GPIO26 como ADC
-    adc_init();                      // Inicializa o conversor ADC
+    adc_init(); // Inicializa o conversor ADC
 
     sensor_data_t sensordata;
-    while (true)
-    {
+    while (true) {
         adc_select_input(0); // GPIO26 = ADC0 (nível de água)
         sensordata.agua = adc_read();
         adc_select_input(1); // GPIO27 = ADC1 (volume de chuva)
@@ -84,6 +78,7 @@ void vSensorTask(void *params)
     }
 }
 
+// Tarefa do display OLED
 // Tarefa do display OLED
 void vDisplayTask(void *params)
 {
@@ -165,8 +160,7 @@ void vDisplayTask(void *params)
     }
 }
 
-int main()
-{
+int main() {
     // Configura Botão B (BOOTSEL)
     gpio_init(BOTAO_B);
     gpio_set_dir(BOTAO_B, GPIO_IN);
