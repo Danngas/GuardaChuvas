@@ -7,339 +7,367 @@
  * e sonoros (buzzer). Usa apenas filas para comunicação, sem semáforos ou mutexes.
  */
 
-#include "pico/stdlib.h"
-#include "hardware/gpio.h"
-#include "hardware/adc.h"
-#include "hardware/i2c.h"
-#include "hardware/pwm.h"
-#include "lib/ssd1306.h"
-#include "lib/font.h"
-#include "FreeRTOS.h"
-#include "task.h"
-#include "queue.h"
-#include <stdio.h>
-#include <string.h>
-#include "pico/bootrom.h" // Biblioteca para reinicialização via USB
-#include "lib/animacoes.h"
+/* === Inclusão de Bibliotecas === */
+#include "pico/stdlib.h"           // Biblioteca padrão do Pico SDK para GPIOs e inicialização
+#include "hardware/gpio.h"         // Funções para configuração e manipulação de GPIOs
+#include "hardware/adc.h"          // Funções para conversão analógico-digital (ADC)
+#include "hardware/i2c.h"          // Funções para comunicação I2C (usada pelo display OLED)
+#include "hardware/pwm.h"          // Funções para modulação por largura de pulso (PWM) para LED RGB e buzzer
+#include "lib/ssd1306.h"           // Biblioteca para controle do display OLED SSD1306
+#include "lib/font.h"              // Fonte para exibição de caracteres no display OLED
+#include "FreeRTOS.h"              // Núcleo do FreeRTOS para gerenciamento de tarefas e filas
+#include "task.h"                  // Funções para criação e manipulação de tarefas
+#include "queue.h"                 // Funções para criação e uso de filas
+#include <stdio.h>                 // Funções padrão de entrada/saída (ex.: printf para depuração)
+#include <string.h>                // Funções para manipulação de strings (ex.: snprintf)
+#include "pico/bootrom.h"          // Funções para reinicialização em modo BOOTSEL
+#include "lib/animacoes.h"         // Funções para animações na matriz WS2812B 5x5
 
-// Configurações de hardware
-#define I2C_PORT i2c1
-#define I2C_SDA 14
-#define I2C_SCL 15
-#define ENDERECO_OLED 0x3C
-#define ADC_SENSOR_CHUVA 26
-#define ADC_SENSOR_AGUA 27
-#define LED_RGB_RED 13
-#define LED_RGB_GREEN 11
-#define LED_RGB_BLUE 12
-#define MATRIZ_WS2812B 7
-#define BUZZER 21
-#define BOTAO_B 6
-#define MATRIZ_WS2812B 7
+/* === Definições de Hardware === */
+// Pinos I2C para o display OLED SSD1306
+#define I2C_PORT i2c1              // Porta I2C usada (i2c1)
+#define I2C_SDA 14                 // Pino SDA (GPIO14)
+#define I2C_SCL 15                 // Pino SCL (GPIO15)
+#define ENDERECO_OLED 0x3C         // Endereço I2C do display OLED (0x3C)
 
-// Estrutura para dados dos sensores
-typedef struct {
-    uint16_t chuva; // Volume de chuva
-    uint16_t agua;  // Nível de água
+// Pinos ADC para sensores simulados
+#define ADC_SENSOR_CHUVA 26        // GPIO26 (ADC0) para sensor de volume de chuva
+#define ADC_SENSOR_AGUA 27         // GPIO27 (ADC1) para sensor de nível de água
+
+// Pinos PWM para LED RGB
+#define LED_RGB_RED 13             // GPIO13 para canal vermelho do LED RGB
+#define LED_RGB_GREEN 11           // GPIO11 para canal verde do LED RGB
+#define LED_RGB_BLUE 12            // GPIO12 para canal azul do LED RGB
+
+// Pino PIO para matriz WS2812B
+#define MATRIZ_WS2812B 7           // GPIO7 para matriz de LEDs WS2812B 5x5
+
+// Pino PWM para buzzer
+#define BUZZER 21                  // GPIO21 para buzzer
+
+// Pino de entrada para botão
+#define BOTAO_B 6                  // GPIO6 para botão B (BOOTSEL)
+
+// Definição redundante (já declarada acima, pode ser um erro no código original)
+#define MATRIZ_WS2812B 7           // Repetição do pino da matriz WS2812B
+
+/* === Estrutura de Dados === */
+// Estrutura para armazenar leituras dos sensores
+typedef struct
+{
+    uint16_t chuva;                // Valor bruto do sensor de chuva (0–4095)
+    uint16_t agua;                 // Valor bruto do sensor de nível de água (0–4095)
 } sensor_data_t;
 
-// Enum para estados de alerta
-typedef enum {
-    SEGURO,
-    ALERTA,
-    ENCHENTE
+/* === Enumeração de Estados === */
+// Estados possíveis do sistema com base nas condições de risco
+typedef enum
+{
+    SEGURO,                        // Condição segura (baixo risco)
+    ALERTA,                        // Condição de alerta (risco moderado)
+    ENCHENTE                       // Condição de enchente (alto risco)
 } alert_state_t;
 
-// Variável global para o estado do sistema
-volatile alert_state_t system_state = SEGURO;
+/* === Variáveis Globais === */
+volatile alert_state_t system_state = SEGURO; // Estado inicial do sistema (Seguro)
+QueueHandle_t xQueueSensorData;               // Fila para comunicação de dados dos sensores
 
-QueueHandle_t xQueueSensorData;
-
-// Manipulador de interrupção para Botão B (BOOTSEL)
-void gpio_irq_handler(uint gpio, uint32_t events) {
-    if (gpio == BOTAO_B && events & GPIO_IRQ_EDGE_FALL) {
-        printf("Botão B pressionado: entrando em modo BOOTSEL\n");
-        reset_usb_boot(0, 0);
+/* === Manipulador de Interrupção do Botão B === */
+// Função chamada quando o botão B (BOOTSEL) é pressionado
+void gpio_irq_handler(uint gpio, uint32_t events)
+{
+    if (gpio == BOTAO_B && events & GPIO_IRQ_EDGE_FALL) // Verifica se é o botão B com borda de descida
+    {
+        printf("Botão B pressionado: entrando em modo BOOTSEL\n"); // Log de depuração
+        reset_usb_boot(0, 0); // Reinicia a placa em modo BOOTSEL para upload de firmware
     }
 }
 
-// Tarefa de leitura dos sensores
-void vSensorTask(void *params) {
-    adc_gpio_init(ADC_SENSOR_AGUA); // Configura GPIO27 como ADC
-    adc_gpio_init(ADC_SENSOR_CHUVA); // Configura GPIO26 como ADC
-    adc_init(); // Inicializa o conversor ADC
+/* === Tarefa de Leitura dos Sensores === */
+// Tarefa responsável por ler os sensores de chuva e nível de água via ADC
+void vSensorTask(void *params)
+{
+    // Configura os pinos ADC
+    adc_gpio_init(ADC_SENSOR_AGUA);  // Inicializa GPIO27 como entrada ADC
+    adc_gpio_init(ADC_SENSOR_CHUVA); // Inicializa GPIO26 como entrada ADC
+    adc_init();                      // Inicializa o módulo ADC do RP2040
 
-    sensor_data_t sensordata;
-    while (true) {
-        adc_select_input(0); // GPIO26 = ADC0 (nível de água)
-        sensordata.agua = adc_read();
-        adc_select_input(1); // GPIO27 = ADC1 (volume de chuva)
-        sensordata.chuva = adc_read();
+    sensor_data_t sensordata;        // Estrutura para armazenar leituras
+    while (true)
+    {
+        // Lê sensor de nível de água (ADC0, GPIO26)
+        adc_select_input(0);         // Seleciona canal ADC0
+        sensordata.agua = adc_read(); // Lê valor bruto (0–4095)
 
-        // Mapeia valores ADC (0-4095) para percentuais (0-100)
-        uint8_t nivel_agua = (sensordata.agua * 100) / 4095;
-        uint8_t volume_chuva = (sensordata.chuva * 100) / 4095;
+        // Lê sensor de volume de chuva (ADC1, GPIO27)
+        adc_select_input(1);         // Seleciona canal ADC1
+        sensordata.chuva = adc_read(); // Lê valor bruto (0–4095)
 
-        // Depuração: imprime valores brutos e percentuais
+        // Calcula percentuais para depuração
+        uint8_t nivel_agua = (sensordata.agua * 100) / 4095;   // Converte para 0–100%
+        uint8_t volume_chuva = (sensordata.chuva * 100) / 4095; // Converte para 0–100%
+
+        // Log de depuração com valores brutos e percentuais
         printf("Sensor Chuva: %u (%d%%), Sensor Água: %u (%d%%)\n",
                sensordata.chuva, volume_chuva, sensordata.agua, nivel_agua);
 
-        // Envia dados para a fila
-        xQueueSend(xQueueSensorData, &sensordata, 0);
-        vTaskDelay(pdMS_TO_TICKS(100)); // Leitura a 10 Hz
+        // Envia os dados brutos para a fila
+        xQueueSend(xQueueSensorData, &sensordata, 0); // Envia sem espera
+        vTaskDelay(pdMS_TO_TICKS(100));              // Executa a 10 Hz (100ms)
     }
 }
 
-// Tarefa de lógica de alerta
-void vAlertLogicTask(void *params) {
-    sensor_data_t sensordata;
-    while (true) {
-        // Usa xQueuePeek para não consumir a mensagem
-        if (xQueuePeek(xQueueSensorData, &sensordata, pdMS_TO_TICKS(100)) == pdTRUE) {
-            // Mapeia valores para percentuais
-            uint8_t nivel_agua = (sensordata.agua * 100) / 4095;
-            uint8_t volume_chuva = (sensordata.chuva * 100) / 4095;
+/* === Tarefa do Display OLED === */
+// Tarefa responsável por exibir informações no display OLED SSD1306
+void vDisplayTask(void *params)
+{
+    // Inicializa a comunicação I2C
+    i2c_init(I2C_PORT, 400 * 1000); // Configura I2C a 400 kHz
+    gpio_set_function(I2C_SDA, GPIO_FUNC_I2C); // Define GPIO14 como SDA
+    gpio_set_function(I2C_SCL, GPIO_FUNC_I2C); // Define GPIO15 como SCL
+    gpio_pull_up(I2C_SDA);                    // Ativa pull-up interno
+    gpio_pull_up(I2C_SCL);                    // Ativa pull-up interno
 
-            // Determina o estado
-            alert_state_t new_state;
-            if (nivel_agua >= 80 || volume_chuva >= 80) {
-                new_state = ENCHENTE;
-            } else if (nivel_agua >= 50 || volume_chuva >= 50) {
-                new_state = ALERTA;
-            } else {
-                new_state = SEGURO;
-            }
+    // Inicializa o display OLED
+    ssd1306_t ssd;                            // Estrutura de controle do display
+    ssd1306_init(&ssd, 128, 64, false, ENDERECO_OLED, I2C_PORT); // Inicializa: 128x64, sem VCC externo
+    ssd1306_config(&ssd);                     // Configura parâmetros do display
+    ssd1306_fill(&ssd, false);                // Limpa o buffer do display
+    ssd1306_send_data(&ssd);                  // Atualiza o display (limpo)
 
-            // Atualiza o estado global
-            system_state = new_state;
+    sensor_data_t sensordata;                  // Estrutura para receber dados
+    char buffer[32];                          // Buffer para formatar strings
+    const char *status;                       // Ponteiro para string de status
+    while (true)
+    {
+        // Recebe dados da fila (bloqueia até receber)
+        if (xQueueReceive(xQueueSensorData, &sensordata, portMAX_DELAY) == pdTRUE)
+        {
+            // Converte valores brutos para percentuais
+            uint8_t nivel_agua = (sensordata.agua * 100) / 4095;   // Nível de água (0–100%)
+            uint8_t volume_chuva = (sensordata.chuva * 100) / 4095; // Volume de chuva (0–100%)
 
-            // Depuração: imprime estado atualizado
-            printf("vAlertLogicTask: Estado atualizado: %d (0=Seguro, 1=Alerta, 2=Enchente)\n", (int)new_state);
-        }
-        vTaskDelay(pdMS_TO_TICKS(100)); // Processa a 10 Hz
-    }
-}
-
-// Tarefa do display OLED
-void vDisplayTask(void *params) {
-    // Inicializa I2C
-    i2c_init(I2C_PORT, 400 * 1000);
-    gpio_set_function(I2C_SDA, GPIO_FUNC_I2C);
-    gpio_set_function(I2C_SCL, GPIO_FUNC_I2C);
-    gpio_pull_up(I2C_SDA);
-    gpio_pull_up(I2C_SCL);
-
-    // Inicializa display
-    ssd1306_t ssd;
-    ssd1306_init(&ssd, 128, 64, false, ENDERECO_OLED, I2C_PORT);
-    ssd1306_config(&ssd);
-    ssd1306_fill(&ssd, false); // Limpa o display
-    ssd1306_send_data(&ssd);
-
-    sensor_data_t sensordata;
-    char buffer[32];
-    while (true) {
-        if (xQueueReceive(xQueueSensorData, &sensordata, portMAX_DELAY) == pdTRUE) {
-            // Mapeia valores para percentuais
-            uint8_t nivel_agua = (sensordata.agua * 100) / 4095;
-            uint8_t volume_chuva = (sensordata.chuva * 100) / 4095;
-
-            // Limpa o display
+            // Limpa o buffer do display
             ssd1306_fill(&ssd, false);
 
-            // Consulta o estado global
-            const char *status;
-            if (system_state == ENCHENTE) {
-                status = "Enchente";
-                ssd1306_rect(&ssd, 1, 1, 126, 62, true, false);
-                ssd1306_rect(&ssd, 28, 10, 105, 12, true, false);
-            } else if (system_state == ALERTA) {
-                status = "Alerta";
-                ssd1306_rect(&ssd, 28, 10, 105, 12, true, false);
-            } else {
-                status = "Seguro";
+            // Determina o estado do sistema e desenha elementos gráficos
+            if (nivel_agua >= 70 || volume_chuva >= 80) // Condição de enchente
+            {
+                status = "Enchente";                   // Define status como "Enchente"
+                ssd1306_rect(&ssd, 1, 1, 126, 62, true, false); // Borda externa
+                ssd1306_rect(&ssd, 28, 10, 105, 12, true, false); // Borda para "Chuva"
             }
+            else if (nivel_agua >= 50 || volume_chuva >= 50) // Condição de alerta
+            {
+                status = "Alerta";                     // Define status como "Alerta"
+                ssd1306_rect(&ssd, 28, 10, 105, 12, true, false); // Borda para "Chuva"
+            }
+            else // Condição segura
+            {
+                status = "Seguro";                     // Define status como "Seguro"
+            }
+
+            // Desenha borda externa do display
             ssd1306_rect(&ssd, 0, 0, 128, 64, true, false);
 
-            // Exibe "Água: X%"
-            snprintf(buffer, sizeof(buffer), "Agua: %d%%", nivel_agua);
-            ssd1306_draw_string(&ssd, buffer, 25, 4);
+            // Exibe "Água: X%" no display
+            snprintf(buffer, sizeof(buffer), "Agua: %d%%", nivel_agua); // Formata string
+            ssd1306_draw_string(&ssd, buffer, 25, 4);                  // Desenha na posição (25,4)
 
-            // Exibe "Chuva: Y%"
-            snprintf(buffer, sizeof(buffer), "Chuva: %d%%", volume_chuva);
-            ssd1306_draw_string(&ssd, buffer, 25, 15);
+            // Exibe "Chuva: Y%" no display
+            snprintf(buffer, sizeof(buffer), "Chuva: %d%%", volume_chuva); // Formata string
+            ssd1306_draw_string(&ssd, buffer, 25, 15);                   // Desenha na posição (25,15)
 
-            // Exibe status
-            snprintf(buffer, sizeof(buffer), "%s", status);
-            ssd1306_draw_string(&ssd, buffer, 35, 30);
+            // Exibe status do sistema
+            snprintf(buffer, sizeof(buffer), "%s", status); // Formata string
+            ssd1306_draw_string(&ssd, buffer, 35, 30);     // Desenha na posição (35,30)
 
-            // Desenha barra gráfica para nível de água (100 pixels de largura, 8 pixels de altura)
-            uint8_t barra_largura = nivel_agua; // Escala 0-100% para 0-100 pixels
-            ssd1306_rect(&ssd, 48, 15, barra_largura, 8, true, true);
-            ssd1306_rect(&ssd, 48, 15, 100, 8, true, false);
+            // Desenha barra gráfica para nível de água
+            uint8_t barra_largura = nivel_agua; // Escala 0–100% para 0–100 pixels
+            ssd1306_rect(&ssd, 48, 15, barra_largura, 8, true, true); // Barra preenchida
+            ssd1306_rect(&ssd, 48, 15, 100, 8, true, false);          // Borda da barra
 
-            // Atualiza o display
+            // Atualiza o display com o conteúdo do buffer
             ssd1306_send_data(&ssd);
         }
-        vTaskDelay(pdMS_TO_TICKS(100)); // Atualiza a 10 Hz
+        vTaskDelay(pdMS_TO_TICKS(100)); // Atualiza a 10 Hz (100ms)
     }
 }
 
+/* === Tarefa do LED RGB === */
+// Tarefa responsável por controlar as cores do LED RGB com base no estado do sistema
+void vLedRgbTask(void *params)
+{
+    // Configura os pinos como PWM
+    gpio_set_function(LED_RGB_RED, GPIO_FUNC_PWM);   // GPIO13 para PWM
+    gpio_set_function(LED_RGB_GREEN, GPIO_FUNC_PWM); // GPIO11 para PWM
+    gpio_set_function(LED_RGB_BLUE, GPIO_FUNC_PWM);  // GPIO12 para PWM
 
-
-// Tarefa de controle do LED RGB
-void vLedRgbTask(void *params) {
-    // Configura GPIOs como PWM
-    gpio_set_function(LED_RGB_RED, GPIO_FUNC_PWM);
-    gpio_set_function(LED_RGB_GREEN, GPIO_FUNC_PWM);
-    gpio_set_function(LED_RGB_BLUE, GPIO_FUNC_PWM);
-
-    // Obtém os slices PWM
-    uint slice_red = pwm_gpio_to_slice_num(LED_RGB_RED);
-    uint slice_green = pwm_gpio_to_slice_num(LED_RGB_GREEN);
-    uint slice_blue = pwm_gpio_to_slice_num(LED_RGB_BLUE);
+    // Obtém os slices PWM correspondentes aos pinos
+    uint slice_red = pwm_gpio_to_slice_num(LED_RGB_RED);     // Slice para vermelho
+    uint slice_green = pwm_gpio_to_slice_num(LED_RGB_GREEN); // Slice para verde
+    uint slice_blue = pwm_gpio_to_slice_num(LED_RGB_BLUE);   // Slice para azul
 
     // Configura PWM: ~1 kHz, resolução de 8 bits
-    pwm_set_clkdiv(slice_red, 100.0f); // 125 MHz / 100 / 256 = ~4.88 kHz, ajustado para ~1 kHz
+    pwm_set_clkdiv(slice_red, 100.0f);   // Divisor de clock para ~4.88 kHz, ajustado
     pwm_set_clkdiv(slice_green, 100.0f);
     pwm_set_clkdiv(slice_blue, 100.0f);
-    pwm_set_wrap(slice_red, 255); // Resolução 0–255
+    pwm_set_wrap(slice_red, 255);        // Resolução de 0–255
     pwm_set_wrap(slice_green, 255);
     pwm_set_wrap(slice_blue, 255);
 
-    // Define canais PWM (A ou B dependendo do GPIO)
-    uint chan_red = pwm_gpio_to_channel(LED_RGB_RED);
-    uint chan_green = pwm_gpio_to_channel(LED_RGB_GREEN);
-    uint chan_blue = pwm_gpio_to_channel(LED_RGB_BLUE);
+    // Obtém os canais PWM (A ou B) para cada pino
+    uint chan_red = pwm_gpio_to_channel(LED_RGB_RED);     // Canal para vermelho
+    uint chan_green = pwm_gpio_to_channel(LED_RGB_GREEN); // Canal para verde
+    uint chan_blue = pwm_gpio_to_channel(LED_RGB_BLUE);   // Canal para azul
 
-    // Duty inicial: 0 (desligado)
+    // Inicializa com duty cycle 0 (LED desligado)
     pwm_set_chan_level(slice_red, chan_red, 0);
     pwm_set_chan_level(slice_green, chan_green, 0);
     pwm_set_chan_level(slice_blue, chan_blue, 0);
 
-    // Habilita PWM
+    // Habilita os slices PWM
     pwm_set_enabled(slice_red, true);
     pwm_set_enabled(slice_green, true);
     pwm_set_enabled(slice_blue, true);
 
+    sensor_data_t sensordata; // Estrutura para receber dados
+    while (true)
+    {
+        // Recebe dados da fila (bloqueia até receber)
+        if (xQueueReceive(xQueueSensorData, &sensordata, portMAX_DELAY) == pdTRUE)
+        {
+            // Converte valores brutos para percentuais
+            uint8_t nivel_agua = (sensordata.agua * 100) / 4095;   // Nível de água
+            uint8_t volume_chuva = (sensordata.chuva * 100) / 4095; // Volume de chuva
 
-
-    while (true) {
-        // Ajusta cores com base no system_state
-        switch (system_state) {
-            case SEGURO:
-                pwm_set_chan_level(slice_red, chan_red, 0);     // Vermelho: 0
+            // Define a cor do LED RGB com base no estado
+            if (nivel_agua >= 70 || volume_chuva >= 80) // Condição de enchente
+            {
+                pwm_set_chan_level(slice_red, chan_red, 1);     // Vermelho: 100%
+                pwm_set_chan_level(slice_green, chan_green, 0); // Verde: 0%
+                pwm_set_chan_level(slice_blue, chan_blue, 0);   // Azul: 0%
+                printf("vLedRgbTask: Vermelho (Enchente)\n");   // Log de depuração
+            }
+            else if (nivel_agua >= 50 || volume_chuva >= 50) // Condição de alerta
+            {
+                pwm_set_chan_level(slice_red, chan_red, 1);     // Vermelho: 100%
                 pwm_set_chan_level(slice_green, chan_green, 1); // Verde: 100%
-                pwm_set_chan_level(slice_blue, chan_blue, 0);    // Azul: 0
-                printf("vLedRgbTask: Verde (Seguro)\n");
-                break;
-            case ALERTA:
-                pwm_set_chan_level(slice_red, chan_red, 1);   // Vermelho: 100%
-                pwm_set_chan_level(slice_green, chan_green,1); // Verde: 100%
-                pwm_set_chan_level(slice_blue, chan_blue, 0);    // Azul: 0
-                printf("vLedRgbTask: Amarelo (Alerta)\n");
-                break;
-            case ENCHENTE:
-                pwm_set_chan_level(slice_red, chan_red, 1);   // Vermelho: 100%
-                pwm_set_chan_level(slice_green, chan_green, 0);  // Verde: 0
-                pwm_set_chan_level(slice_blue, chan_blue, 0);    // Azul: 0
-                printf("vLedRgbTask: Vermelho (Enchente)\n");
-                break;
+                pwm_set_chan_level(slice_blue, chan_blue, 0);   // Azul: 0% (amarelo)
+                printf("vLedRgbTask: Amarelo (Alerta)\n");      // Log de depuração
+            }
+            else // Condição segura
+            {
+                pwm_set_chan_level(slice_red, chan_red, 0);     // Vermelho: 0%
+                pwm_set_chan_level(slice_green, chan_green, 1); // Verde: 100%
+                pwm_set_chan_level(slice_blue, chan_blue, 0);   // Azul: 0%
+                printf("vLedRgbTask: Verde (Seguro)\n");        // Log de depuração
+            }
         }
-        vTaskDelay(pdMS_TO_TICKS(100)); // Atualiza a 10 Hz
+        vTaskDelay(pdMS_TO_TICKS(100)); // Atualiza a 10 Hz (100ms)
     }
 }
 
+/* === Tarefa do Buzzer === */
+// Tarefa responsável por controlar o buzzer com sons distintos para cada estado
+void vBuzzerTask(void *params)
+{
+    // Configura o pino do buzzer como PWM
+    gpio_set_function(BUZZER, GPIO_FUNC_PWM); // GPIO21 para PWM
+    uint slice = pwm_gpio_to_slice_num(BUZZER); // Obtém slice PWM
+    uint chan = pwm_gpio_to_channel(BUZZER);   // Obtém canal PWM
 
-// Tarefa de controle do buzzer
-void vBuzzerTask(void *params) {
-    // Configura GPIO como PWM
-    gpio_set_function(BUZZER, GPIO_FUNC_PWM);
-    uint slice = pwm_gpio_to_slice_num(BUZZER);
-    uint chan = pwm_gpio_to_channel(BUZZER);
-
-    // Configura PWM: 500 Hz, duty cycle 50%
-    uint clock = 125000000; // Clock de 125 MHz
-    uint divider = 4;       // Divisor de clock
-    uint top = clock / (divider * 500); // 500 Hz
-    pwm_set_clkdiv(slice, divider);
-    pwm_set_wrap(slice, top);
+    // Configura PWM para 500 Hz com duty cycle de 50%
+    uint clock = 125000000;             // Clock do RP2040 (125 MHz)
+    uint divider = 4;                   // Divisor de clock
+    uint top = clock / (divider * 500); // Calcula TOP para 500 Hz
+    pwm_set_clkdiv(slice, divider);     // Aplica divisor
+    pwm_set_wrap(slice, top);           // Define resolução
     pwm_set_chan_level(slice, chan, top / 2); // Duty cycle 50%
-    pwm_set_enabled(slice, false); // Inicia desligado
+    pwm_set_enabled(slice, false);       // Inicia com PWM desligado
 
-    while (true) {
-        switch (system_state) {
-            case SEGURO:
-                pwm_set_enabled(slice, false); // Silêncio
-                printf("vBuzzerTask: Silêncio (Seguro)\n");
-                vTaskDelay(pdMS_TO_TICKS(100)); // Mantém sincronia
-                break;
-            case ALERTA:
-                // Beeps curtos: 500ms ligado, 500ms desligado
-                pwm_set_enabled(slice, true);
-                printf("vBuzzerTask: Beep curto (Alerta)\n");
-                vTaskDelay(pdMS_TO_TICKS(500));
-                pwm_set_enabled(slice, false);
-                vTaskDelay(pdMS_TO_TICKS(500));
-                break;
-            case ENCHENTE:
+    sensor_data_t sensordata;            // Estrutura para receber dados
+    while (true)
+    {
+        // Recebe dados da fila (bloqueia até receber)
+        if (xQueueReceive(xQueueSensorData, &sensordata, portMAX_DELAY) == pdTRUE)
+        {
+            // Converte valores brutos para percentuais
+            uint8_t nivel_agua = (sensordata.agua * 100) / 4095;   // Nível de água
+            uint8_t volume_chuva = (sensordata.chuva * 100) / 4095; // Volume de chuva
+
+            // Controla o buzzer com base no estado
+            if (nivel_agua >= 70 || volume_chuva >= 80) // Condição de enchente
+            {
                 // Beeps rápidos: 200ms ligado, 200ms desligado
-                pwm_set_enabled(slice, true);
-                printf("vBuzzerTask: Beep rápido (Enchente)\n");
-                vTaskDelay(pdMS_TO_TICKS(200));
-                pwm_set_enabled(slice, false);
-                vTaskDelay(pdMS_TO_TICKS(200));
-                break;
+                pwm_set_enabled(slice, true);           // Liga o buzzer
+                printf("vBuzzerTask: Beep rápido (Enchente)\n"); // Log de depuração
+                vTaskDelay(pdMS_TO_TICKS(200));        // Espera 200ms
+                pwm_set_enabled(slice, false);          // Desliga o buzzer
+                vTaskDelay(pdMS_TO_TICKS(200));        // Espera 200ms
+            }
+            else if (nivel_agua >= 50 || volume_chuva >= 50) // Condição de alerta
+            {
+                // Beeps curtos: 500ms ligado, 500ms desligado
+                pwm_set_enabled(slice, true);           // Liga o buzzer
+                printf("vBuzzerTask: Beep curto (Alerta)\n"); // Log de depuração
+                vTaskDelay(pdMS_TO_TICKS(500));        // Espera 500ms
+                pwm_set_enabled(slice, false);          // Desliga o buzzer
+                vTaskDelay(pdMS_TO_TICKS(500));        // Espera 500ms
+            }
+            else // Condição segura
+            {
+                pwm_set_enabled(slice, false);          // Mantém buzzer desligado
+                printf("vBuzzerTask: Silêncio (Seguro)\n"); // Log de depuração
+                vTaskDelay(pdMS_TO_TICKS(100));        // Mantém sincronia a 10 Hz
+            }
         }
     }
 }
 
+/* === Tarefa da Matriz WS2812B === */
+// Tarefa responsável por controlar as animações na matriz WS2812B 5x5
+void vMatrixTask(void *params)
+{
+    npInit(MATRIZ_WS2812B);                       // Inicializa a matriz (GPIO7, PIO)
+    srand(to_ms_since_boot(get_absolute_time())); // Inicializa semente para números aleatórios
+    sensor_data_t sensordata;                     // Estrutura para receber dados
+    while (true)
+    {
+        // Recebe dados da fila (bloqueia até receber)
+        if (xQueueReceive(xQueueSensorData, &sensordata, portMAX_DELAY) == pdTRUE)
+        {
+            // Converte valores brutos para percentuais (usado apenas para depuração)
+            uint8_t nivel_agua = (sensordata.agua * 100) / 4095;   // Nível de água
+            uint8_t volume_chuva = (sensordata.chuva * 100) / 4095; // Volume de chuva
 
-// Tarefa de controle da matriz WS2812B
-void vMatrixTask(void *params) {
-    npInit(MATRIZ_WS2812B); // Inicializa a matriz
-    srand(to_ms_since_boot(get_absolute_time())); // Inicializa semente para rand()
-    while (true) {
-        switch (system_state) {
-            case SEGURO:
-                anim_seguro();
-                printf("vMatrixTask: Animação Seguro\n");
-                break;
-            case ALERTA:
-                anim_alerta();
-                printf("vMatrixTask: Animação Alerta\n");
-                break;
-            case ENCHENTE:
-                anim_enchente();
-                printf("vMatrixTask: Animação Enchente\n");
-                break;
+            // Executa animação de enchente com base no nível de água
+            anim_enchente(sensordata.agua); // Passa valor bruto para a função
         }
-        // vTaskDelay está nas animações
     }
 }
 
-
-
-int main() {
-    // Configura Botão B (BOOTSEL)
-    gpio_init(BOTAO_B);
-    gpio_set_dir(BOTAO_B, GPIO_IN);
-    gpio_pull_up(BOTAO_B);
+/* === Função Principal === */
+int main()
+{
+    // Configura o botão B (BOOTSEL)
+    gpio_init(BOTAO_B);                       // Inicializa GPIO6
+    gpio_set_dir(BOTAO_B, GPIO_IN);          // Configura como entrada
+    gpio_pull_up(BOTAO_B);                   // Ativa pull-up interno
+    // Habilita interrupção na borda de descida
     gpio_set_irq_enabled_with_callback(BOTAO_B, GPIO_IRQ_EDGE_FALL, true, &gpio_irq_handler);
 
-    stdio_init_all();
+    stdio_init_all();                        // Inicializa comunicação serial (UART) para printf
+    // Cria fila para dados dos sensores (6 elementos, tamanho de sensor_data_t)
     xQueueSensorData = xQueueCreate(6, sizeof(sensor_data_t));
 
-    // Criação das tarefas
-    xTaskCreate(vSensorTask, "Sensor Task", 256, NULL, 2, NULL);
-    xTaskCreate(vAlertLogicTask, "Alert Logic Task", 256, NULL, 1, NULL);
-    xTaskCreate(vDisplayTask, "Display Task", 512, NULL, 1, NULL);
-    xTaskCreate(vLedRgbTask, "LED RGB Task", 256, NULL, 1, NULL);
-    xTaskCreate(vBuzzerTask, "Buzzer Task", 256, NULL, 1, NULL);
-    xTaskCreate(vMatrixTask, "Matriz Task", 256, NULL, 1, NULL);
+    // Cria tarefas do FreeRTOS
+    xTaskCreate(vSensorTask, "Sensor Task", 256, NULL, 1, NULL);   // Tarefa de sensores
+    xTaskCreate(vDisplayTask, "Display Task", 512, NULL, 2, NULL); // Tarefa do display
+    xTaskCreate(vLedRgbTask, "LED RGB Task", 256, NULL, 2, NULL);  // Tarefa do LED RGB
+    xTaskCreate(vBuzzerTask, "Buzzer Task", 256, NULL, 2, NULL);   // Tarefa do buzzer
+    xTaskCreate(vMatrixTask, "Matriz Task", 256, NULL, 2, NULL);   // Tarefa da matriz
 
-    
-
-    vTaskStartScheduler();
-    panic_unsupported();
+    vTaskStartScheduler();                   // Inicia o escalonador do FreeRTOS
+    panic_unsupported();                     // Caso o escalonador falhe
 }

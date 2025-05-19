@@ -1,14 +1,16 @@
 #include "matrizled.c"
+#include "FreeRTOS.h"
+#include "task.h"
 #include <time.h>
 #include <stdlib.h>
 
 // Intensidade padrão para as animações
 #define intensidade 1
+
 void printNum(void) {
     npWrite();
     npClear();
 }
-
 
 // Sprites existentes
 int OFF[5][5][3] = {
@@ -64,18 +66,15 @@ void DesligaMatriz(void) {
     printNum();
 }
 
-
-
 // Animação para SEGURO: seta verde estática
 void anim_seguro(void) {
-    PedestreSIGA(); // Exibe seta verde
-    vTaskDelay(pdMS_TO_TICKS(100)); // Sincronia a 10 Hz
+    PedestreSIGA();
+    vTaskDelay(pdMS_TO_TICKS(100)); // 10 Hz
 }
 
 // Animação para ALERTA: chuva piscante azul
 void anim_alerta(void) {
     npClear();
-    // Acende 3 LEDs aleatórios em azul
     for (int i = 0; i < 3; i++) {
         int x = rand() % 5;
         int y = rand() % 5;
@@ -83,20 +82,59 @@ void anim_alerta(void) {
         npSetLED(posicao, 0, 0, 100); // Azul
     }
     npWrite();
-    vTaskDelay(pdMS_TO_TICKS(500)); // Piscar a 2 Hz
+    vTaskDelay(pdMS_TO_TICKS(500)); // 2 Hz
 }
 
-// Animação para ENCHENTE: onda vermelha
-void anim_enchente(void) {
-    static int row = 0;
+// Animação para ENCHENTE: linhas azuis baseadas no nível de água
+void anim_enchente(uint16_t nivel_agua) {
     npClear();
-    // Acende uma linha em vermelho
-    for (int col = 0; col < 5; col++) {
-        int posicao = getIndex(col, row);
-        npSetLED(posicao, 100, 0, 0); // Vermelho
+
+    // Converte nível de água para percentual (0–100)
+    uint8_t percent_agua = (nivel_agua * 100) / 4095;
+
+    // Verifica intervalos e acende linhas horizontais em azul (de baixo para cima)
+    if (percent_agua >= 98) {
+        // Linhas 4, 3, 2, 1, 0 (todas)
+        for (int row = 0; row < 5; row++) {
+            for (int col = 0; col < 5; col++) {
+                int posicao = getIndex(col, row);
+                npSetLED(posicao, 0, 0, 100); // Azul
+            }
+        }
+    } else if (percent_agua >= 80) {
+        // Linhas 4, 3, 2, 1
+        for (int row = 1; row <= 4; row++) {
+            for (int col = 0; col < 5; col++) {
+                int posicao = getIndex(col, row);
+                npSetLED(posicao, 0, 0, 100); // Azul
+            }
+        }
+    } else if (percent_agua >= 60) {
+        // Linhas 4, 3, 2
+        for (int row = 2; row <= 4; row++) {
+            for (int col = 0; col < 5; col++) {
+                int posicao = getIndex(col, row);
+                npSetLED(posicao, 0, 0, 100); // Azul
+            }
+        }
+    } else if (percent_agua >= 40) {
+        // Linhas 4, 3
+        for (int row = 3; row <= 4; row++) {
+            for (int col = 0; col < 5; col++) {
+                int posicao = getIndex(col, row);
+                npSetLED(posicao, 0, 0, 100); // Azul
+            }
+        }
+    } else if (percent_agua >= 20) {
+        // Linha 4
+        for (int col = 0; col < 5; col++) {
+            int posicao = getIndex(col, 4);
+            npSetLED(posicao, 0, 0, 100); // Azul
+        }
     }
+    // 0–19%: Nenhuma linha (npClear já limpou)
+
     npWrite();
-    row = (row + 1) % 5; // Avança linha
-    vTaskDelay(pdMS_TO_TICKS(200)); // Onda a 5 Hz
+    vTaskDelay(pdMS_TO_TICKS(100)); // 10 Hz
 }
 

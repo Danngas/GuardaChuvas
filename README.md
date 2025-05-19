@@ -1,126 +1,222 @@
-```markdown
-# GuardaChuvas ☔
+# GuardaChuvas ☔: Estação de Alerta de Enchente 🌊
 
-**Estação de Alerta de Enchente com Simulação de Sensores**
+**Monitoramento em tempo real com alertas visuais e sonoros!**
 
-Bem-vindo ao **GuardaChuvas**, um sistema embarcado desenvolvido com FreeRTOS na plataforma BitDogLab (Raspberry Pi Pico RP2040). O projeto monitora nível de água e volume de chuva em tempo real, usando sensores simulados via ADC, e exibe alertas visuais no display OLED, LED RGB, matriz WS2812B 5x5 e sonoros no buzzer. O nome "GuardaChuvas" reflete a proteção contra enchentes! 🌊
+<div align="center">
+  <img src="fig.png" alt="EmbarcaTech Logo" width="1500"/>
+</div>
 
-Autor: **Daniel Silva de Souza**
+Bem-vindo ao **GuardaChuvas**, um sistema embarcado para a **BitDogLab** (Raspberry Pi Pico RP2040) usando **FreeRTOS**. Monitora nível de água e chuva, exibindo alertas em um display OLED, LED RGB, matriz WS2812B 5x5 e buzzer. O nome "GuardaChuvas" reflete proteção contra enchentes com tecnologia e inclusão! 🌧️⚡
 
----
+[![Licença MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)]() [![FreeRTOS](https://img.shields.io/badge/Powered_by-FreeRTOS-orange.svg)](https://www.freertos.org)
 
-## 📋 Sobre o Projeto
-
-O **GuardaChuvas** é uma estação de alerta que:
-- **Lê** sensores de volume de chuva (GPIO 26, ADC0) e nível de água (GPIO 27, ADC1) via ADC.
-- **Processa** os dados para determinar o risco de enchente (Seguro, Alerta, Enchente).
-- **Exibe** informações no display OLED SSD1306 (nível de água, chuva, status, barra gráfica).
-- **Controla** um LED RGB para indicar o estado: verde (Seguro), amarelo (Alerta), vermelho (Enchente).
-- **Anima** uma matriz WS2812B 5x5 com padrões de chuva ou ondas.
-- **Emite** sons distintos no buzzer para acessibilidade (silêncio, beeps, tom contínuo).
-
-O sistema usa **FreeRTOS** com filas (`xQueueSensorData`, `xQueueAlertState`) para comunicação, sem semáforos ou mutexes.
+**Autor**: Daniel Silva de Souza  
+**Polo**: Bom Jesus da Lapa  
+**Data**: 18/05/2025
 
 ---
 
-## 🎯 Funcionalidades
+## 📖 Sobre o Projeto
 
-- **Leitura de Sensores**: Volume de chuva e nível de água mapeados para 0-100%.
-- **Display OLED**: Mostra nível de água, chuva, status e barra gráfica.
-- **LED RGB**: Indica risco com cores (verde, amarelo, vermelho).
-- **Matriz WS2812B 5x5**: Animações de chuva ou ondas.
-- **Buzzer**: Sons distintos para inclusão (deficiência visual).
-- **FreeRTOS**: Tarefas com filas para operação em tempo real.
+O **GuardaChuvas** é uma estação de alerta que combina sensores simulados, processamento em tempo real e saídas visuais/sonoras para prevenir enchentes. Com **FreeRTOS**, gerencia tarefas e filas no RP2040, garantindo eficiência.
+
+### Objetivo
+Monitorar e alertar sobre riscos de enchente em três estados:  
+🟢 **Seguro** | 🟡 **Alerta** | 🔴 **Enchente**
+
+### Casos de Uso
+- 🏙️ Monitoramento em áreas urbanas propensas a inundações.
+- 📚 Educação em sistemas embarcados e IoT.
+- 🔧 Prototipagem de alertas ambientais acessíveis.
+
+---
+
+## 🚀 Funcionalidades
+
+- **Sensores Simulados**:
+  - Chuva (GPIO26, ADC0) e nível de água (GPIO27, ADC1).
+  - Valores mapeados de 0–4095 para 0–100%.
+- **Display OLED SSD1306**:
+  - Exibe percentuais, status e barra gráfica.
+  - I2C (GPIOs 14, 15), 128x64 pixels.
+  - ![OLED Display](display.png)
+- **LED RGB**:
+  - Verde (Seguro), amarelo (Alerta), vermelho (Enchente).
+  - PWM (GPIOs 11, 12, 13).
+- **Matriz WS2812B 5x5**:
+  - Animações de chuva ou ondas baseadas no nível de água.
+  - PIO (GPIO7).
+  - ![Matriz Animação](matriz.png)
+- **Buzzer**:
+  - Silêncio (Seguro), beeps curtos (Alerta), beeps rápidos (Enchente).
+  - PWM (GPIO21).
+- **Botão BOOTSEL**:
+  - Reinicia para upload de firmware (GPIO6).
+- **FreeRTOS**:
+  - 5 tarefas com comunicação via `xQueueSensorData`.
 
 ---
 
 ## 🛠️ Tecnologias e Periféricos
 
-- **Plataforma**: BitDogLab (RP2040).
-- **Periféricos**:
-  - Sensores: ADC (GPIO 26: chuva, GPIO 27: água).
-  - Display OLED SSD1306: I2C (GPIOs 14, 15).
-  - LED RGB: PWM (GPIOs 11, 12, 13).
-  - Matriz WS2812B 5x5: PIO (GPIO 7).
-  - Buzzer: PWM (GPIO 10).
-  - Botão B: GPIO 6 (BOOTSEL).
-- **Software**:
-  - FreeRTOS (filas).
-  - Pico SDK.
-  - Bibliotecas: `ssd1306.h`, `font.h`, `matrizled.c`, `animacoes.h`, `ws2818b.pio`.
+| **Componente**            | **Descrição**                              | **Pinos**          |
+|---------------------------|--------------------------------------------|--------------------|
+| **Plataforma**            | BitDogLab (Raspberry Pi Pico RP2040)       | -                  |
+| **Sensores**              | Simulados via ADC (chuva, nível de água)   | GPIO26, GPIO27     |
+| **Display OLED SSD1306**  | Exibe informações via I2C                  | GPIO14 (SDA), GPIO15 (SCL) |
+| **LED RGB**               | Indicador de estado via PWM                | GPIO11, GPIO12, GPIO13 |
+| **Matriz WS2812B 5x5**    | Animações via PIO                         | GPIO7              |
+| **Buzzer**                | Alertas sonoros via PWM                   | GPIO21             |
+| **Botão B (BOOTSEL)**     | Reinicialização para upload               | GPIO6              |
+
+**Software**:
+- **FreeRTOS**: Tarefas e filas.
+- **Pico SDK**: Suporte ao RP2040.
+- **Bibliotecas**: `ssd1306.h`, `font.h`, `matrizled.c`, `animacoes.h`, `ws2818b.pio`.
 
 ---
 
 ## 📂 Estrutura do Repositório
-
-```plaintext
 GuardaChuvas/
-├── src/
-│   ├── GuardaChuvas.c
-│   ├── CMakeLists.txt
-├── lib/
-│   ├── font.h
-│   ├── FreeRTOSConfig.h
-│   ├── matrizled.c
-│   ├── animacoes.h
-│   ├── ssd1306.c
-│   ├── ssd1306.h
-│   ├── ws2818b.pio
-├── docs/
-│   ├── Ficha_Proposta.md
-│   └── Instrucoes_Compilacao.md
-├── README.md
-└── .gitignore
-```
+├──                         # Diretório com o código-fonte principal<br>
+│   ├── GuardaChuvas.c          # Código principal com tarefas FreeRTOS<br>
+│   ├── CMakeLists.txt          # Arquivo de configuração para compilação com CMake<br>
+├── lib/                        # Diretório com bibliotecas e drivers<br>
+│   ├── font.h                  # Arquivo de cabeçalho com fonte para o display OLED<br>
+│   ├── FreeRTOSConfig.h        # Configuração personalizada do FreeRTOS<br>
+│   ├── matrizled.c             # Implementação do controle da matriz WS2812B<br>
+│   ├── animacoes.h             # Definições de animações para a matriz<br>
+│   ├── ssd1306.c               # Driver de baixo nível para o display OLED<br>
+│   ├── ssd1306.h               # Cabeçalho do driver do display OLED<br>
+│   ├── ws2818b.pio             # Programa PIO para controle da matriz WS2812B<br>
+├── README.md                   # Este arquivo de documentação principal<br>
+└── .gitignore                  # Arquivo para ignorar arquivos no controle de versão
 
 ---
 
-## 🚀 Como Compilar e Executar
+## 🏗️ Arquitetura do Sistema
+
+🌧️ [Sensores ADC] --> [vSensorTask] --> [xQueueSensorData]                                            |                                            v  [vDisplayTask]  [vLedRgbTask]  [vBuzzerTask]  [vMatrixTask]      📺 OLED        💡 LED RGB      🎵 Buzzer      🌊 Matriz
+
+- **vSensorTask**: Lê sensores e envia dados.
+- **xQueueSensorData**: Distribui dados para tarefas.
+- **Tarefas de saída**: Atualizam periféricos.
+
+---
+
+## 📡 Como Compilar e Executar
 
 ### Pré-requisitos
-- Pico SDK instalado.
-- Compilador ARM (`arm-none-eabi-gcc`).
-- CMake e Make.
-- Placa BitDogLab (RP2040).
-- Terminal serial (`minicom`).
+- **Pico SDK** instalado.
+- **Compilador ARM**: `arm-none-eabi-gcc`.
+- **Ferramentas**: CMake, Make.
+- **Placa**: BitDogLab (RP2040).
+- **Terminal**: `minicom` ou PuTTY.
 
 ### Passos
 1. **Clone o repositório**:
    ```bash
-   git clone [https://github.com/seu-usuario/GuardaChuvas.git](https://github.com/Danngas/GuardaChuvas.git)
+   git clone https://github.com/Danngas/GuardaChuvas.git
    cd GuardaChuvas
-   ```
 
-2. **Configure o Pico SDK**:
-   ```bash
-   export PICO_SDK_PATH=/caminho/para/pico-sdk
-   ```
 
-3. **Compile**:
-   ```bash
-   mkdir build
-   cd build
-   cmake ..
-   make
-   ```
+Configure o Pico SDK:
+export PICO_SDK_PATH=/caminho/para/pico-sdk
 
-4. **Carregue o firmware**:
-   - Conecte a placa em modo BOOTSEL.
-   - Copie `GuardaChuvas.uf2` para a placa.
 
-5. **Teste**:
-   - Use `minicom -b 115200 -o -D /dev/ttyACM0` para depuração.
-   - Simule sensores e observe display, LEDs, matriz e buzzer.
+Crie diretório de build:
+mkdir build
+cd build
 
----
 
-## 📝 Autor
+Compile:
+cmake ..
+make
 
-- **Nome**: Daniel Silva de Souza
-- **Polo**: Bom Jesus da Lapa
-- **Data**: 18/05/2025
 
----
+Carregue o firmware:
 
-**GuardaChuvas: Monitorando enchentes com inclusão e tecnologia!** ☔
-`
+Pressione BOOTSEL e conecte o USB.
+Copie build/GuardaChuvas.uf2 para a placa.
+
+
+Teste:
+
+Conecte via serial:minicom -b 115200 -o -D /dev/ttyACM0
+
+
+Simule sensores com potenciômetros.
+Observe display, LEDs, matriz e buzzer.
+
+
+
+
+🎯 Resultados Esperados
+
+
+Estado
+Display OLED
+LED RGB
+Matriz WS2812B
+Buzzer
+
+
+
+🟢 Seguro
+"Seguro", <50%
+Verde
+Sem animação
+Silêncio
+
+
+🟡 Alerta
+"Alerta", ≥50%
+Amarelo
+Chuva piscante
+Beeps curtos (500ms)
+
+
+🔴 Enchente
+"Enchente", ≥70% (água)
+Vermelho
+Linhas azuis ascendentes
+Beeps rápidos (200ms)
+
+
+Animação de enchente: linhas azuis sobem com o nível de água!
+Testes
+
+Use potenciômetros nos GPIOs 26 e 27 (0–3.3V).
+Verifique transições de estado (ex.: água ≥70%).
+Pressione o botão B para modo BOOTSEL.
+Monitore logs seriais para depuração.
+
+
+🎨 Arte ASCII do GuardaChuvas
+       ☔
+      /|\
+     / | \
+    /  |  \
+   /___|___\
+   🌊🌊🌊🌊🌊
+   Alerta de Enchente!
+
+
+🤝 Contribuições
+
+Fork o repositório.
+Crie uma branch: git checkout -b feature/nova-animacao.
+Commit: git commit -m "Adiciona nova animação".
+Envie um pull request.
+
+
+📜 Licença
+Licenciado sob a MIT License.
+
+📧 Contato
+
+Autor: Daniel Silva de Souza
+Email: daniel.silva@example.com (substitua pelo seu email)
+GitHub: Danngas
+
+GuardaChuvas: Proteção contra enchentes com tecnologia e estilo! ☔🌊⚡```
