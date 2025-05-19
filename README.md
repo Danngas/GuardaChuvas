@@ -3,7 +3,7 @@
 **Monitoramento em tempo real com alertas visuais e sonoros!**
 
 <div align="center">
-  <img src="fig.png" alt="EmbarcaTech Logo" width="1500"/>
+  <img src="lib/img.png" alt="EmbarcaTech Logo" width="1500"/>
 </div>
 
 Bem-vindo ao **GuardaChuvas**, um sistema embarcado para a **BitDogLab** (Raspberry Pi Pico RP2040) usando **FreeRTOS**. Monitora nível de água e chuva, exibindo alertas em um display OLED, LED RGB, matriz WS2812B 5x5 e buzzer. O nome "GuardaChuvas" reflete proteção contra enchentes com tecnologia e inclusão! 🌧️⚡
@@ -39,14 +39,14 @@ Monitorar e alertar sobre riscos de enchente em três estados:
 - **Display OLED SSD1306**:
   - Exibe percentuais, status e barra gráfica.
   - I2C (GPIOs 14, 15), 128x64 pixels.
-  - ![OLED Display](display.png)
+  - ![OLED Display](lib/display.png)
 - **LED RGB**:
   - Verde (Seguro), amarelo (Alerta), vermelho (Enchente).
   - PWM (GPIOs 11, 12, 13).
 - **Matriz WS2812B 5x5**:
   - Animações de chuva ou ondas baseadas no nível de água.
   - PIO (GPIO7).
-  - ![Matriz Animação](matriz.png)
+  - ![Matriz Animação](lib/matriz.png)
 - **Buzzer**:
   - Silêncio (Seguro), beeps curtos (Alerta), beeps rápidos (Enchente).
   - PWM (GPIO21).
