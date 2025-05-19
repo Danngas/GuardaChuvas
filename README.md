@@ -8,7 +8,7 @@
 
 Bem-vindo ao **GuardaChuvas**, um sistema embarcado para a **BitDogLab** (Raspberry Pi Pico RP2040) usando **FreeRTOS**. Monitora nível de água e chuva, exibindo alertas em um display OLED, LED RGB, matriz WS2812B 5x5 e buzzer. O nome "GuardaChuvas" reflete proteção contra enchentes com tecnologia e inclusão! 🌧️⚡
 
-[![Licença MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)]() [![FreeRTOS](https://img.shields.io/badge/Powered_by-FreeRTOS-orange.svg)](https://www.freertos.org)
+[![Licença MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)]() [![FreeRTOS](https://img.shields.io/badge/Powered_by-FreeRTOS-orange.svg)](https://www.freertos.org) [![Linguagem C](https://img.shields.io/badge/Language-C-brightgreen.svg)]() [![VS Code](https://img.shields.io/badge/Editor-VS_Code-blue.svg)](https://code.visualstudio.com)
 
 **Autor**: Daniel Silva de Souza  
 **Polo**: Bom Jesus da Lapa  
