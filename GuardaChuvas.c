@@ -244,22 +244,22 @@ void vLedRgbTask(void *params)
             // Define a cor do LED RGB com base no estado
             if (nivel_agua >= 70 || volume_chuva >= 80) // Condição de enchente
             {
-                pwm_set_chan_level(slice_red, chan_red, 1);     // Vermelho: 100%
+                pwm_set_chan_level(slice_red, chan_red, 255);     // Vermelho: 100%
                 pwm_set_chan_level(slice_green, chan_green, 0); // Verde: 0%
                 pwm_set_chan_level(slice_blue, chan_blue, 0);   // Azul: 0%
                 printf("vLedRgbTask: Vermelho (Enchente)\n");   // Log de depuração
             }
             else if (nivel_agua >= 50 || volume_chuva >= 50) // Condição de alerta
             {
-                pwm_set_chan_level(slice_red, chan_red, 1);     // Vermelho: 100%
-                pwm_set_chan_level(slice_green, chan_green, 1); // Verde: 100%
+                pwm_set_chan_level(slice_red, chan_red, 255);     // Vermelho: 100%
+                pwm_set_chan_level(slice_green, chan_green, 255); // Verde: 100%
                 pwm_set_chan_level(slice_blue, chan_blue, 0);   // Azul: 0% (amarelo)
                 printf("vLedRgbTask: Amarelo (Alerta)\n");      // Log de depuração
             }
             else // Condição segura
             {
                 pwm_set_chan_level(slice_red, chan_red, 0);     // Vermelho: 0%
-                pwm_set_chan_level(slice_green, chan_green, 1); // Verde: 100%
+                pwm_set_chan_level(slice_green, chan_green, 255); // Verde: 100%
                 pwm_set_chan_level(slice_blue, chan_blue, 0);   // Azul: 0%
                 printf("vLedRgbTask: Verde (Seguro)\n");        // Log de depuração
             }
